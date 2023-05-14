@@ -6,7 +6,7 @@ Code for my Honours thesis, titled _"Bayesian Neural Network Priors for Making I
 
 - GP: Gaussian Process
 - BNN: Bayesian Neural Network
-- GPi-G: GP-induced BNN prior with Gaussian weights and biases
+- GPi-G: **GP-i**nduced BNN prior with **G**aussian weights and biases
 - SST: Sea-Surface Temperature
 
 ## Examples
