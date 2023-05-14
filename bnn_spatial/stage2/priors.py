@@ -38,32 +38,6 @@ class PriorModule(nn.Module):
 Gaussian Prior (Fixed and GPi-G)
 """
 
-class NSGaussianPrior(PriorModule):
-    def __init__(self, mu=0.0, std=1.0):
-        """
-        Child class for Gaussian prior over the standardised Z parameters (nonstationary case).
-
-        :param mu: float, mean for all parameters
-        :param std: float, std dev for all parameters
-        """
-        super(NSGaussianPrior, self).__init__()
-        self.mu = mu
-        self.std = std
-
-    def logp(self, net, test_input=None):
-        """
-        Compute log joint prior.
-
-        :param net: nn.Module, the input network to be evaluated
-        :return: torch.Tensor, log joint prior
-        """
-        res = 0.
-        for name, param in net.named_parameters():  # each param is a tensor of Zw or Zb values
-            if 'batch_norm' in name:
-                continue
-            res -= 0.5 * torch.sum(param ** 2)
-        return res
-
 class FixedGaussianPrior(PriorModule):
     def __init__(self, mu=0.0, std=1.0):
         """

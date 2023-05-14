@@ -101,7 +101,8 @@ class GaussianLayer(nn.Module):
             # Adjust for the case when W_mu and W_std have shape [batch_size, 1]
             if (len(W_std.shape) == 2) & (W_std.shape[-1] == 1):
                 W_std = W_std.unsqueeze(1)
-                W_mu = W_mu.unsqueeze(1)
+                if isinstance(W_mu, torch.Tensor):
+                    W_mu = W_mu.unsqueeze(1)
 
             W = W_mu + W_std * torch.randn((1, self.input_dim, self.output_dim), device=W_std.device)
             W = W / math.sqrt(self.input_dim)  # NTK

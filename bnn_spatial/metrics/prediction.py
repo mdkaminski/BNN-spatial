@@ -8,17 +8,17 @@ from scipy.special import ndtri
 # Note: ndtri stands for normal (n) distribution (dtr) inverse (i)
 
 # bnn_preds = [n_samples, n_test]
-# y = [n_train]
-# bnn_preds[:, inds] = [n_samples, n_train]
+# y = [n_holdout]
+# bnn_preds[:, inds] = [n_samples, n_holdout]
 
 def rmspe(preds, obs, return_all=False):
     """
     Compute root mean-squared prediction error.
 
-    :param preds: np.ndarray, shape (n_samples, n_train), validation set predictions
-    :param obs: np.ndarray, shape (n_train), validation set targets / observations
+    :param preds: np.ndarray, shape (n_samples, n_holdout), holdout set predictions
+    :param obs: np.ndarray, shape (n_holdout), holdout set observational targets
     :param return_all: bool, specify if RMSPE is given for each MCMC sample (otherwise average is given)
-    :return: np.ndarray or float, validation set RMSPE
+    :return: np.ndarray or float, holdout set RMSPE
     """
     sq_diffs = (preds - np.expand_dims(obs, 0)) ** 2
     sample_rmspe = np.sqrt(np.average(sq_diffs, axis=1))
@@ -31,12 +31,12 @@ def perc_coverage(preds, obs, pred_var, percent=90, return_all=False):
     """
     Compute X-percent coverage (default X = 90).
 
-    :param preds: np.ndarray, shape (n_samples, n_train), validation set predictions
-    :param obs: np.ndarray, shape (n_train), validation set targets / observations
-    :param pred_var: np.ndarray, shape (n_train), validation set predictive variance
+    :param preds: np.ndarray, shape (n_samples, n_holdout), holdout set predictions
+    :param obs: np.ndarray, shape (n_holdout), holdout set observational targets
+    :param pred_var: np.ndarray, shape (n_holdout), holdout set predictive variance
     :param percent: float, specify X for X-percent coverage (default 90)
     :param return_all: bool, specify if X-percent coverage is given for each MCMC sample (otherwise average is given)
-    :return: np.ndarray or float, validation set X-percent coverage
+    :return: np.ndarray or float, holdout set X-percent coverage
     """
     tail_prob = 1 - percent / 100
     c = ndtri(1 - tail_prob / 2)  # quantile c with P(|Z| > c) = tail_prob
@@ -55,12 +55,12 @@ def interval_score(preds, obs, pred_var, alpha=0.1, return_all=False):
     """
     Compute negatively-oriented interval score.
 
-    :param preds: np.ndarray, shape (n_samples, n_train), validation set predictions
-    :param obs: np.ndarray, shape (n_train), validation set targets / observations
-    :param pred_var: np.ndarray, shape (n_train), validation set predictive variance
+    :param preds: np.ndarray, shape (n_samples, n_holdout), holdout set predictions
+    :param obs: np.ndarray, shape (n_holdout), holdout set observational targets
+    :param pred_var: np.ndarray, shape (n_holdout), holdout set predictive variance
     :param alpha: float, probability of tail region
     :param return_all: bool, specify if interval score is given for each MCMC sample (otherwise average is given)
-    :return: np.ndarray or float, validation set interval score
+    :return: np.ndarray or float, holdout set interval score
     """
     c = ndtri(1 - alpha / 2)  # quantile c with P(|Z| > c) = alpha
     pred_sd = np.expand_dims(np.sqrt(pred_var), 0)

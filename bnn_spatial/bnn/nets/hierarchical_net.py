@@ -39,9 +39,6 @@ class HierarchicalNet(nn.Module):
         else:
             self.activation_fn = activation_fn
 
-        if int(np.sqrt(hidden_dims[0])) ** 2 != hidden_dims[0] and input_dim == 2:
-            raise Exception('For embedding layer, require the first hidden dim to be a perfect square')
-
         # Initialise layers: self.layers stores hidden layers in ModuleList
         if domain is None:
             self.layers = nn.ModuleList()
@@ -52,6 +49,8 @@ class HierarchicalNet(nn.Module):
             rbf_dim = None
         else:
             rbf_dim = hidden_dims[0]
+            if (int(np.sqrt(rbf_dim)) ** 2 != rbf_dim) and (input_dim == 2):
+                raise Exception('For embedding layer, require the first hidden dim to be a perfect square')
             self.layers = nn.ModuleList([EmbeddingLayer(input_dim, rbf_dim, domain, rbf_ls=rbf_ls)])
 
         # Note: nn.ModuleList holds network submodules in a list, and submodules can be added with add_module.

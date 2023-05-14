@@ -822,25 +822,24 @@ def plot_cov_nonstat(cov, domain, cov_min=None, cov_max=None):
         cov_df[3-i, j].index = cov_df[3-i, j].index.to_series().round(1)  # round x2 labels
         cov_df[3-i, j].columns = cov_df[3-i, j].columns.to_series().round(1)  # round x1 labels
         titles[3-i, j] = str(tuple(np.round([x1, x2], 2)))  # store subplot title with coordinates
-    vmin = min([cov_df[rr, cc].values.min() for rr, cc in product(range(4), range(4))])  # min covariance value
-    if cov_min is not None:
-        vmin = min(cov_min, vmin)
-    vmax = max([cov_df[rr, cc].values.max() for rr, cc in product(range(4), range(4))])  # max covariance value
-    if cov_max is not None:
-        vmax = max(cov_max, vmax)
+
+    # Obtain min/max covariance values
+    if cov_min is None:
+        vmin = min([cov_df[rr, cc].values.min() for rr, cc in product(range(4), range(4))])
+    else:
+        vmin = cov_min
+    if cov_max is None:
+        vmax = max([cov_df[rr, cc].values.max() for rr, cc in product(range(4), range(4))])
+    else:
+        vmax = cov_max
 
     # Generate grid of plots
     for i, j in product(range(4), range(4)):
         x1_idx = x1_idxs[j]
         x2_idx = np.flip(x2_idxs)[3-i]  # compare with the index definition for cov_df
-        sb.heatmap(cov_df[3-i, j], cbar=False, ax=ax[i, j], vmin=vmin, vmax=vmax,
-                   xticklabels=7, yticklabels=7)  # create heatmap
+        sb.heatmap(cov_df[3-i, j], cbar=False, ax=ax[i, j], vmin=vmin, vmax=vmax, xticklabels=7, yticklabels=7)
         ax[i, j].plot(x1_idx, x2_idx, 'k+', ms=20)  # add point marker (vertical x2 index is opposite of x2 value)
         ax[i, j].set_title(titles[3-i, j])  # add subplot title with coordinates
-        #ax[i, j].set_xticklabels(cov_df[3-i, j].columns, rotation=90)
-        #ax[i, j].set_yticklabels(cov_df[3-i, j].index)
-        #ax[i, j].xaxis.set_major_locator(MaxNLocator(nbins='auto', min_n_ticks=7, prune='upper'))
-        #ax[i, j].yaxis.set_major_locator(MaxNLocator(nbins='auto', min_n_ticks=8))
         if j > 0:
             ax[i, j].tick_params(labelleft=False)
         if i < 3:
@@ -896,16 +895,14 @@ def plot_cov_nonstat_diff(cov, gp_cov, domain):
     for i, j in product(range(4), range(4)):
         x1_idx = x1_idxs[j]
         x2_idx = np.flip(x2_idxs)[3-i]  # compare with the index definition for cov_df
-        sb.heatmap(diff_df[3-i, j], xticklabels='auto', yticklabels='auto', cbar=False, cmap='seismic', center=0,
-                   ax=ax[i, j], vmin=vmin, vmax=vmax)  # create heatmap
+        sb.heatmap(diff_df[3-i, j], xticklabels=7, yticklabels=7, cbar=False, cmap='seismic', center=0,
+                   ax=ax[i, j], vmin=vmin, vmax=vmax)  # heatmap of covariance differences
         ax[i, j].plot(x1_idx, x2_idx, 'k+', ms=20)  # add point marker (vertical x2 index is opposite of x2 value)
         ax[i, j].set_title(titles[3-i, j])  # add subplot title with coordinates
         if j > 0:
             ax[i, j].tick_params(labelleft=False)
         if i < 3:
             ax[i, j].tick_params(labelbottom=False)
-        ax[i, j].xaxis.set_major_locator(MaxNLocator(nbins='auto', min_n_ticks=7, prune='upper'))
-        ax[i, j].yaxis.set_major_locator(MaxNLocator(nbins='auto', min_n_ticks=8))
     fig.colorbar(mappable=ax[0, 0].collections[0], ax=ax[:, -1], location='right', shrink=0.6)
 
 def plot_cov_contours(cov1, domain, level, cov2=None, latent=None, perc_of_max=True):
