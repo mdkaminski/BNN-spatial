@@ -25,4 +25,11 @@ The folder `scripts` contains several `Python` script files, implementing the ex
 
 Python (>= 3.7), PyTorch, NumPy, SciPy, MatPlotLib, Seaborn, Pickle, Itertools
 
+## Instructions
+
+The examples in Chapter 6 require the SST data set, available in NetCDF format here:
+https://hpc.niasra.uow.edu.au/azm/global-analysis-forecast-phy-001-024_1551608429013.nc
+
+To run the script files for the Chapter 6 examples, after cloning this repository, create a new `data` folder within the `scripts` folder. Then, place the NetCDF file into the `data` folder.
+
 
