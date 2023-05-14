@@ -4,6 +4,7 @@ Generic utility functions
 
 import numpy as np
 import torch
+import random
 from pathlib import Path
 from itertools import repeat
 
@@ -48,7 +49,7 @@ def inf_loop(data_loader):
     for loader in repeat(data_loader):
         yield from loader
 
-def set_seed(seed=99):
+def set_seed(seed=1):
     """
     Set seed for reproducibility of results (applied to numpy and pytorch).
 
@@ -57,5 +58,6 @@ def set_seed(seed=99):
     torch.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    random.seed(seed)
     np.random.seed(seed)
 
