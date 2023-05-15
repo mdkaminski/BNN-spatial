@@ -11,11 +11,11 @@ import matplotlib as mpl
 import matplotlib.pylab as plt
 import matplotlib.colors as colors
 import matplotlib.transforms as mtrans
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, FuncFormatter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
-from scipy.stats import norm
+from scipy.special import ndtr
 from itertools import product
 import seaborn as sb
 import pandas as pd
@@ -55,7 +55,7 @@ def plot_samples(domain, samples, n_keep=10, color="xkcd:bluish", quantile=False
         moe = 2 * samples.std(1)  # 2 std dev margin of error
         ub, lb = mu + moe, mu - moe  # uncertainty bands of +/- 2 std dev
     else:
-        q = 100 * norm.cdf(2)  # obtain % chance given by +2 std dev in normal cdf
+        q = 100 * ndtr(2)  # obtain % chance given by +2 std dev in normal cdf
         Q = np.percentile(samples, [100 - q, q], axis=1)  # compute (100-q)-th and q-th sample percentiles
         ub, lb = Q[1, :], Q[0, :]  # uncertainty bands of +/- 2 std dev
 
@@ -991,7 +991,22 @@ def plot_cov_contours(cov1, domain, level, cov2=None, latent=None, perc_of_max=T
             plt.plot(x1, x2, 'k+')  # add point marker
     plt.axis('scaled')
 
-def plot_mean_sd(mean_grid, sd_grid, domain, obs=None, sd_min=None, sd_max=None):
+def fmt(x, pos):
+    """
+    Scientific notation formatting for the number x
+
+    :param x: float, tick value
+    :param pos: tick position
+    :return: string, tick label
+    """
+    mantissa, power = '{:.2e}'.format(x).split('e')
+    power = int(power)
+    if power == 0:
+        return str(mantissa)
+    else:
+        return '{}e{}'.format(mantissa, power)
+
+def plot_mean_sd(mean_grid, sd_grid, domain, obs=None, sd_range=None, mean_range=None):
     """
     Panelled plots of sample means and standard deviations (suitable for samples with 2D inputs).
 
@@ -999,8 +1014,8 @@ def plot_mean_sd(mean_grid, sd_grid, domain, obs=None, sd_min=None, sd_max=None)
     :param sd_grid: np.ndarray, shape (n_test_v, n_test_h), grid of sample std deviations
     :param domain: torch.Tensor, array of all test inputs
     :param obs: (optional) np.ndarray, size (n_train, 2), columns contain x1 and x2 coordinates of observations
-    :param sd_min: (optional) float, specify vmin for std deviation plot
-    :param sd_max: (optional) float, specify vmax for std deviation plot
+    :param sd_range: (optional) list [float], specify [vmin, vmax] for std deviation plot
+    :param mean_range: (optional) list [float], specify [vmin, vmax] for mean plot
     """
     domain = domain.detach().cpu()
     x1_range = domain[:, 0].unique(sorted=True).numpy()
@@ -1012,25 +1027,47 @@ def plot_mean_sd(mean_grid, sd_grid, domain, obs=None, sd_min=None, sd_max=None)
     for cc in range(2):
         ax[cc] = fig.add_subplot(gs[2*cc])
     X1, X2 = np.meshgrid(x1_range, x2_range)
-    if (sd_min is not None) & (sd_max is not None):
-        sd_levels = np.linspace(sd_min, sd_max, 256)
+
+    # Customise SD and mean value ranges
+    if sd_range is not None:
+        sd_levels = np.linspace(sd_range[0], sd_range[1], 256)
     else:
         sd_levels = 256
-    ims = [ax[0].contourf(X1, X2, mean_grid, levels=256, cmap='Reds', origin='lower'),
-           ax[1].contourf(X1, X2, sd_grid, levels=sd_levels, cmap='Blues', origin='lower', vmin=sd_min, vmax=sd_max)]
+    if mean_range is not None:
+        mean_levels = np.linspace(mean_range[0], mean_range[1], 256)
+    else:
+        mean_levels = 256
+
+    # Generate panelled plots and append colourbar
+    if (mean_range is not None) & (sd_range is not None):
+        ims = [ax[0].contourf(X1, X2, mean_grid, levels=mean_levels, cmap='Reds', origin='lower',
+                              vmin=mean_range[0], vmax=mean_range[1]),
+               ax[1].contourf(X1, X2, sd_grid, levels=sd_levels, cmap='Blues', origin='lower',
+                              vmin=sd_range[0], vmax=sd_range[1])]
+    else:
+        ims = [ax[0].contourf(X1, X2, mean_grid, levels=mean_levels, cmap='Reds', origin='lower'),
+               ax[1].contourf(X1, X2, sd_grid, levels=sd_levels, cmap='Blues', origin='lower')]
     titles = ['Mean', 'Standard Deviation']
     divider = []
     cax = []
     for cc in range(2):
         divider.append(make_axes_locatable(ax[cc]))
         cax.append(divider[cc].append_axes("right", size="5%", pad=0.15))
-        if (sd_min is not None) & (sd_max is not None) & (cc == 1):
-            fig.colorbar(mappable=ims[cc], cax=cax[cc], boundaries=np.linspace(sd_min, sd_max, 256))
-        else:
-            fig.colorbar(mappable=ims[cc], cax=cax[cc])
+        ax[cc].set_title(titles[cc])
+
+        # Plot observations (if specified)
         if obs is not None:
             ax[cc].scatter(obs[:, 0], obs[:, 1], marker='o', color='k', s=10)
-        ax[cc].set_title(titles[cc])
+
+        # Add colourbar with adjusted range
+        if (sd_range is not None) & (cc == 1):
+            fig.colorbar(mappable=ims[cc], cax=cax[cc], boundaries=np.linspace(sd_range[0], sd_range[1], 256),
+                         format=FuncFormatter(fmt))
+        elif (mean_range is not None) & (cc == 0):
+            fig.colorbar(mappable=ims[cc], cax=cax[cc], boundaries=np.linspace(mean_range[0], mean_range[1], 256),
+                         format=FuncFormatter(fmt))
+        else:
+            fig.colorbar(mappable=ims[cc], cax=cax[cc], format=FuncFormatter(fmt))
 
 def plot_samples_2d(samples, extent, obs=None, figsize=(14,13)):
     """
