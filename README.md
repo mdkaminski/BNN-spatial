@@ -25,7 +25,7 @@ The folder `scripts` contains several `Python` script files, implementing the ex
 
 Python (>= 3.7), PyTorch, NumPy, SciPy, Matplotlib, Seaborn, pandas
 
-Exact versions used: Python 3.7.13, PyTorch 1.9.0+cu111, NumPy 1.21.5, SciPy 1.7.3, Seaborn 0.12.1, pandas 1.3.5
+Exact versions used: Python 3.7.13, PyTorch 1.9.0+cu111, NumPy 1.21.5, SciPy 1.7.3, Matplotlib 3.5.3, Seaborn 0.12.1, pandas 1.3.5
 
 ## Instructions
 
