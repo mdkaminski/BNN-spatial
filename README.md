@@ -23,7 +23,7 @@ The folder `scripts` contains several `Python` script files, implementing the ex
 
 ## Software Requirements
 
-Python (>= 3.7), PyTorch, NumPy, SciPy, MatPlotLib, Seaborn, Pickle, Itertools
+Python (>= 3.7), PyTorch, NumPy, SciPy, MatPlotLib, Seaborn
 
 ## Instructions
 
