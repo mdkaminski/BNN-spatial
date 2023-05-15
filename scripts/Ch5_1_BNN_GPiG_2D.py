@@ -116,7 +116,7 @@ std_bnn = GaussianNet(input_dim=2,
                       rbf_ls=rbf_ls).to(device)
 
 # Perform predictions using n_plot sets of sampled weights/biases
-std_bnn_samples = std_bnn.sample_functions(test_tensor, n_plot).detach().cpu().numpy()
+std_bnn_samples = std_bnn.sample_functions(test_tensor, n_plot).detach().cpu().numpy().squeeze()
 # shape of tensor is (n_test ** 2, n_plot); rows for inputs, cols for samples
 
 # Resize array of predictions
@@ -462,10 +462,8 @@ plot_cov_nonstat(cov=bnn_big_cov_mx,
 plt.savefig(FIG_DIR + '/BNN_stat_cov_heatmaps.png', bbox_inches='tight')
 
 # Do the same for fixed BNN covariances (using same points)
-plot_cov_nonstat(cov=bnn_big_cov_mx,
-                 domain=test_tensor,
-                 cov_min=cov_min,
-                 cov_max=cov_max)
+plot_cov_nonstat(cov=std_big_cov_mx,
+                 domain=test_tensor)
 plt.savefig(FIG_DIR + '/BNN_std_stat_cov_heatmaps.png', bbox_inches='tight')
 
 # Plot differences of nonstationary covariances (K_BNN - K_GP)
@@ -580,9 +578,9 @@ SGHMC - Fixed BNN posterior
 
 # SGHMC Hyper-parameters (see sampling_configs comments for interpretation)
 n_chains = 4
-keep_every = 5000
+keep_every = 10000
 n_samples = 200
-n_burn = 5000  # must be multiple of keep_every
+n_burn = 10000  # must be multiple of keep_every
 n_burn_thin = n_burn // keep_every
 n_discarded = 100 - n_burn_thin
 

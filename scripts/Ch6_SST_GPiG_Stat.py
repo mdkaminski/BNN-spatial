@@ -459,9 +459,9 @@ SGHMC - Fixed BNN posterior
 
 # SGHMC Hyper-parameters (see sampling_configs comments for interpretation)
 n_chains = 4
-keep_every = 5000
+keep_every = 10000
 n_samples = 200
-n_burn = 5000  # must be multiple of keep_every
+n_burn = 10000  # must be multiple of keep_every
 n_burn_thin = n_burn // keep_every
 n_discarded = 100 - n_burn_thin
 
@@ -805,7 +805,6 @@ mean_min, mean_max = min(mean_min_list), max(mean_max_list)
 plot_mean_sd(mean_grid=std_pred_mean,
              sd_grid=std_pred_sd,
              domain=test_tensor,
-             obs=X,
              sd_range=[sd_min, sd_max],
              mean_range=[mean_min, mean_max])
 plt.savefig(FIG_DIR + '/std_posterior.png', bbox_inches='tight')
@@ -814,7 +813,6 @@ plt.savefig(FIG_DIR + '/std_posterior.png', bbox_inches='tight')
 plot_mean_sd(mean_grid=opt_pred_mean,
              sd_grid=opt_pred_sd,
              domain=test_tensor,
-             obs=X,
              sd_range=[sd_min, sd_max],
              mean_range=[mean_min, mean_max])
 plt.savefig(FIG_DIR + '/GPiG_posterior.png', bbox_inches='tight')

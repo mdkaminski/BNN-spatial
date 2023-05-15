@@ -10,8 +10,8 @@ import os, sys
 import pickle
 
 CWD = sys.path[0]  # directory containing script
-OUT_DIR = os.path.join(CWD, "output_ns")
-FIG_DIR = os.path.join(CWD, "figures_ns")
+OUT_DIR = os.path.join(CWD, "output_ns_naive")
+FIG_DIR = os.path.join(CWD, "figures_ns_naive")
 sys.path.append(os.path.dirname(CWD))
 
 from bnn_spatial.bnn.nets import GaussianNet, BlankNet
@@ -484,9 +484,9 @@ SGHMC - Fixed BNN posterior
 
 # SGHMC Hyper-parameters (see sampling_configs comments for interpretation)
 n_chains = 4
-keep_every = 5000
+keep_every = 1000
 n_samples = 200
-n_burn = 5000  # must be multiple of keep_every
+n_burn = 3000  # must be multiple of keep_every
 n_burn_thin = n_burn // keep_every
 n_discarded = 100 - n_burn_thin
 
@@ -682,7 +682,7 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
     # Populate the array containing all samples
     for k in range(n_samples_all_chains):
-        optim_dict = optim_weights[k][0]  # dictionary of name-tensor pairs for network parameters (one location only)
+        optim_dict = optim_weights[k]  # dictionary of name-tensor pairs for network parameters (one location only)
         W_tensors = list(optim_dict.values())[0::2]
         b_tensors = list(optim_dict.values())[1::2]
         for ll in range(2 * depth):
@@ -695,7 +695,7 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
     # Populate the array only containing samples utilised for predictions
     for k in range(n_chains * n_samples):
-        optim_dict = optim_weights_pred[k][0]  # dictionary of name-tensor pairs for network parameters
+        optim_dict = optim_weights_pred[k]  # dictionary of name-tensor pairs for network parameters
         W_tensors = list(optim_dict.values())[0::2]
         b_tensors = list(optim_dict.values())[1::2]
         for ll in range(2 * depth):

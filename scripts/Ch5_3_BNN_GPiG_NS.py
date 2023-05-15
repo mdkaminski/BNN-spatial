@@ -485,9 +485,9 @@ SGHMC - Fixed BNN posterior
 
 # SGHMC Hyper-parameters (see sampling_configs comments for interpretation)
 n_chains = 4
-keep_every = 5000
+keep_every = 1000
 n_samples = 200
-n_burn = 5000  # must be multiple of keep_every
+n_burn = 3000  # must be multiple of keep_every
 n_burn_thin = n_burn // keep_every
 n_discarded = 100 - n_burn_thin
 

@@ -99,7 +99,7 @@ std_bnn = GaussianNet(input_dim=2,
                       fit_means=False).to(device)
 
 # Perform predictions using n_plot sets of sampled weights/biases
-std_bnn_samples = std_bnn.sample_functions(test_tensor, n_plot).detach().cpu().numpy()
+std_bnn_samples = std_bnn.sample_functions(test_tensor, n_plot).detach().cpu().numpy().squeeze()
 # shape of tensor is (n_test ** 2, n_plot); rows for inputs, cols for samples
 
 # Resize array of predictions
@@ -443,10 +443,8 @@ plot_cov_nonstat(cov=bnn_big_cov_mx,
 plt.savefig(FIG_DIR + '/BNN_stat_cov_heatmaps.png', bbox_inches='tight')
 
 # Do the same for fixed BNN covariances (using same points)
-plot_cov_nonstat(cov=bnn_big_cov_mx,
-                 domain=test_tensor,
-                 cov_min=cov_min,
-                 cov_max=cov_max)
+plot_cov_nonstat(cov=std_big_cov_mx,
+                 domain=test_tensor)
 plt.savefig(FIG_DIR + '/BNN_std_stat_cov_heatmaps.png', bbox_inches='tight')
 
 # Plot differences of nonstationary covariances (K_BNN - K_GP)
