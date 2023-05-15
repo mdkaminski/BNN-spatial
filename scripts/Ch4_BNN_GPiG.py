@@ -27,7 +27,6 @@ from bnn_spatial.stage2.likelihoods import LikGaussian
 from bnn_spatial.stage2.priors import FixedGaussianPrior, OptimGaussianPrior
 from bnn_spatial.stage2.bayes_net import BayesNet
 from bnn_spatial.metrics.sampling import compute_rhat
-from bnn_spatial.metrics.prediction import rmspe, perc_coverage, interval_score
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'  # for handling OMP: Error 15 (2022/11/21)
 
@@ -579,26 +578,6 @@ plot_output_acf(domain=Xtest_tensor,
                 n_samples_kept=n_samples)
 plt.savefig(FIG_DIR + '/std_posterior_acf.png', bbox_inches='tight')
 
-# Prediction performance metrics
-coverage_perc = 90
-score_alpha = 0.1
-std_rmspe = rmspe(preds=bnn_std_preds[:, inds],
-                  obs=y,
-                  return_all=False)
-std_coverage = perc_coverage(preds=bnn_std_preds[:, inds],
-                             obs=y,
-                             pred_var=std_train_var,
-                             percent=coverage_perc,
-                             return_all=False)
-std_score = interval_score(preds=bnn_std_preds[:, inds],
-                           obs=y,
-                           pred_var=std_train_var,
-                           alpha=score_alpha,
-                           return_all=False)
-print('Prediction performance metrics for fixed BNN')
-print('RMSPE: {}\n{}-Percent Coverage: {}\nInterval Score (alpha = {}): {}'
-      .format(std_rmspe, coverage_perc, std_coverage, score_alpha, std_score))
-
 """
 SGHMC - GP-induced BNN posterior
 """
@@ -761,24 +740,6 @@ for ckpt in mcmc_checkpoints:
     plt.plot(X, y, 'ok', zorder=10, ms=10)
     plt.ylim([-3.5, 3.5])
     plt.savefig(FIG_DIR + '/GPiG_posterior_preds_step{}.png'.format(int(50*ckpt)), bbox_inches='tight')
-
-# Prediction performance metrics
-opt_rmspe = rmspe(preds=bnn_optim_preds[:, inds],
-                  obs=y,
-                  return_all=False)
-opt_coverage = perc_coverage(preds=bnn_optim_preds[:, inds],
-                             obs=y,
-                             pred_var=opt_train_var,
-                             percent=coverage_perc,
-                             return_all=False)
-opt_score = interval_score(preds=bnn_optim_preds[:, inds],
-                           obs=y,
-                           pred_var=opt_train_var,
-                           alpha=score_alpha,
-                           return_all=False)
-print('Prediction performance metrics for optimised GPi-G BNN')
-print('RMSPE: {}\n{}-Percent Coverage: {}\nInterval Score (alpha = {}): {}'
-      .format(opt_rmspe, coverage_perc, opt_coverage, score_alpha, opt_score))
 
 # Save all parameter settings used in stage 2 code
 stage2_file.close()
