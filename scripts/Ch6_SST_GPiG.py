@@ -407,13 +407,12 @@ while True:
 Generate Observations
 """
 
-# Each approx 16x16 subregion (dividing evenly into 4x4 squares) has approx 256 inputs
-# Training partition thus has approx 8 * 455 inputs
-# Holdout partition has approx 455 inputs
+# Each approx 16x16 subregion (dividing evenly into 4x4 squares) has 256 inputs
+# Training partition (periphery) thus has approx 12 * 256 inputs
+# Holdout partition (deleted centre) has approx 4 * 256 inputs
 
 sn2 = 0.001  # measurement error variance
 n_train = 100 * 12  # size of training data set
-n_holdout = 100 * 4  # size of holdout data set
 
 # Specify input points for training and holdout data sets
 test_range1 = test_range[:n_test//4]  # lower quarter of x1/x2 indices
@@ -424,18 +423,28 @@ train_range = np.hstack([test_range1, test_range4])  # join vectors into a longe
 holdout_range = np.hstack([test_range2, test_range3])  # ditto
 train_partition = test_array[(np.in1d(test_array[:, 0], train_range)) | (np.in1d(test_array[:, 1], train_range))]
 holdout_partition = test_array[(np.in1d(test_array[:, 0], holdout_range)) & (np.in1d(test_array[:, 1], holdout_range))]
-train_array = train_partition[np.random.randint(0, train_partition.shape[0], size=n_train), :]
-holdout_array = holdout_partition[np.random.randint(0, holdout_partition.shape[0], size=n_holdout), :]
+n_edge = train_partition.shape[0]  # number of points in periphery
+n_inside = holdout_partition.shape[0]  # number of points in deleted centre
+train_array = train_partition[np.random.randint(0, train_partition.shape[0], size=n_train), :]  # training data points
 
-# Obtain input-target pairs for training and holdout data sets
+# Obtain input-target pairs for training and test data sets
 train_inds = [np.argwhere(np.all(test_array == train_array[rr, :], axis=1)).item() for rr in range(n_train)]
-holdout_inds = [np.argwhere(np.all(test_array == holdout_array[rr, :], axis=1)).item() for rr in range(n_holdout)]
+edge_inds = [np.argwhere(np.all(test_array == train_partition[rr, :], axis=1)).item() for rr in range(n_edge)]
+inside_inds = [np.argwhere(np.all(test_array == holdout_partition[rr, :], axis=1)).item() for rr in range(n_inside)]
+test_edge_inds = np.setdiff1d(edge_inds, train_inds)
+test_inds = np.sort(np.hstack([inside_inds, test_edge_inds]))
+n_holdout = len(test_inds)  # total number of unobserved test points
+n_test_edge = len(test_edge_inds)  # number of unobserved test points in periphery
+print('Test Set Size ({}) + Training Set Size ({}) = Number of Inputs ({})'.format(n_holdout, n_train, n_test))
 X = test_array[train_inds, :]
 y = sst_latent[train_inds] + np.random.multivariate_normal(mean=np.zeros(n_train),
                                                            cov=sn2 * np.eye(n_train)).flatten()
-X_holdout = test_array[holdout_inds, :]
-y_holdout = sst_latent[holdout_inds] + np.random.multivariate_normal(mean=np.zeros(n_holdout),
-                                                                     cov=sn2 * np.eye(n_holdout)).flatten()
+X_edge = test_array[test_edge_inds, :]
+y_edge = sst_latent[test_edge_inds] + np.random.multivariate_normal(mean=np.zeros(n_test_edge),
+                                                                    cov=sn2 * np.eye(n_test_edge)).flatten()
+X_inside = test_array[inside_inds, :]
+y_inside = sst_latent[inside_inds] + np.random.multivariate_normal(mean=np.zeros(n_inside),
+                                                                   cov=sn2 * np.eye(n_inside)).flatten()
 
 # Plot latent function (to compare with sample mean plots)
 plt.figure()
@@ -461,9 +470,9 @@ SGHMC - Fixed BNN posterior
 
 # SGHMC Hyper-parameters (see sampling_configs comments for interpretation)
 n_chains = 4
-keep_every = 10000
+keep_every = 1000
 n_samples = 200
-n_burn = 10000  # must be multiple of keep_every
+n_burn = 3000  # must be multiple of keep_every
 n_burn_thin = n_burn // keep_every
 n_discarded = 100 - n_burn_thin
 
@@ -598,9 +607,13 @@ for ss in range(n_chains * n_samples):
 # Obtain mean and std dev of samples
 std_pred_mean = np.mean(bnn_std_preds_, axis=0)
 std_pred_sd = np.std(bnn_std_preds_, axis=0)
-std_holdout_var = np.var(bnn_std_preds, axis=0)[holdout_inds]  # holdout set predictive variance
-print('Fixed BNN predictive variance on holdout set (shape {}): mean {}'
-      .format(std_holdout_var.shape, std_holdout_var.mean()))
+std_var_test = np.var(bnn_std_preds, axis=0)  # test set predictive variance
+std_var_test_inside = std_var_test[inside_inds]  # long-range predictive variance
+std_var_test_edge = std_var_test[test_edge_inds]  # short-range predictive variance
+print('Fixed BNN long-range predictive variance (shape {}): mean {}'
+      .format(std_var_test_inside.shape, std_var_test_inside.mean()))
+print('Fixed BNN short-range predictive variance (shape {}): mean {}'
+      .format(std_var_test_edge.shape, std_var_test_edge.mean()))
 
 # Plot 4-by-4 panels of samples
 plot_samples_2d(samples=bnn_std_preds_,
@@ -630,31 +643,52 @@ plot_output_acf(domain=test_tensor,
                 n_samples_kept=n_samples)
 plt.savefig(FIG_DIR + '/std_posterior_acf.png', bbox_inches='tight')
 
-# Prediction performance metrics
+# Prediction performance metrics for long-range interpolation
 coverage_perc = 90
 score_alpha = 0.1
-std_rmspe = rmspe(preds=bnn_std_preds[:, holdout_inds],
-                  obs=y_holdout,
-                  return_all=False)
-std_coverage = perc_coverage(preds=bnn_std_preds[:, holdout_inds],
-                             obs=y_holdout,
-                             pred_var=std_holdout_var,
-                             percent=coverage_perc,
-                             return_all=False)
-std_score = interval_score(preds=bnn_std_preds[:, holdout_inds],
-                           obs=y_holdout,
-                           pred_var=std_holdout_var,
-                           alpha=score_alpha,
-                           return_all=False)
-print('Prediction performance metrics for fixed BNN')
+std_rmspe_inside = rmspe(preds=bnn_std_preds[:, inside_inds],
+                         obs=y_inside,
+                         return_all=False)
+std_coverage_inside = perc_coverage(preds=bnn_std_preds[:, inside_inds],
+                                    obs=y_inside,
+                                    pred_var=std_var_test_inside,
+                                    percent=coverage_perc,
+                                    return_all=False)
+std_score_inside = interval_score(preds=bnn_std_preds[:, inside_inds],
+                                  obs=y_inside,
+                                  pred_var=std_var_test_inside,
+                                  alpha=score_alpha,
+                                  return_all=False)
+print('Prediction performance metrics for fixed BNN (long-range interpolation)')
 print('RMSPE: {}\n{}-Percent Coverage: {}\nInterval Score (alpha = {}): {}'
-      .format(std_rmspe, coverage_perc, std_coverage, score_alpha, std_score))
+      .format(std_rmspe_inside, coverage_perc, std_coverage_inside, score_alpha, std_score_inside))
+
+# Prediction performance metrics for short-range interpolation
+std_rmspe_edge = rmspe(preds=bnn_std_preds[:, test_edge_inds],
+                       obs=y_edge,
+                       return_all=False)
+std_coverage_edge = perc_coverage(preds=bnn_std_preds[:, test_edge_inds],
+                                  obs=y_edge,
+                                  pred_var=std_var_test_edge,
+                                  percent=coverage_perc,
+                                  return_all=False)
+std_score_edge = interval_score(preds=bnn_std_preds[:, test_edge_inds],
+                                obs=y_edge,
+                                pred_var=std_var_test_edge,
+                                alpha=score_alpha,
+                                return_all=False)
+print('Prediction performance metrics for fixed BNN (short-range interpolation)')
+print('RMSPE: {}\n{}-Percent Coverage: {}\nInterval Score (alpha = {}): {}'
+      .format(std_rmspe_edge, coverage_perc, std_coverage_edge, score_alpha, std_score_edge))
 
 to_save = {'coverage_perc': coverage_perc,
            'score_alpha': score_alpha,
-           'std_rmspe': std_rmspe,
-           'std_coverage': std_coverage,
-           'std_score': std_score}
+           'std_rmspe_inside': std_rmspe_inside,
+           'std_coverage_inside': std_coverage_inside,
+           'std_score_inside': std_score_inside,
+           'std_rmspe_edge': std_rmspe_edge,
+           'std_coverage_edge': std_coverage_edge,
+           'std_score_edge': std_score_edge}
 pickle.dump(to_save, stage2_file)
 
 """
@@ -719,9 +753,13 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
     # Make predictions
     bnn_optim_preds, bnn_optim_preds_all, bnn_optim_grid, bnn_optim_grid_all \
         = bayes_net_optim.predict(test_tensor)  # rows samples, cols traces
-    opt_holdout_var = np.var(bnn_optim_preds, axis=0)[holdout_inds]
-    print('GPi-G BNN predictive variance on holdout set (shape {}): mean {}'
-          .format(opt_holdout_var.shape, opt_holdout_var.mean()))
+    opt_var_test = np.var(bnn_std_preds, axis=0)  # test set predictive variance
+    opt_var_test_inside = opt_var_test[inside_inds]  # long-range predictive variance
+    opt_var_test_edge = opt_var_test[test_edge_inds]  # short-range predictive variance
+    print('GPi-G BNN long-range predictive variance (shape {}): mean {}'
+          .format(opt_var_test_inside.shape, opt_var_test_inside.mean()))
+    print('GPi-G BNN short-range predictive variance (shape {}): mean {}'
+          .format(opt_var_test_edge.shape, opt_var_test_edge.mean()))
 
     # Check BNN locations
     print('BNN locations in test_tensor[bnn_idxs]\n{}'.format(test_tensor[bnn_idxs]))
@@ -883,27 +921,48 @@ plot_mean_sd(mean_grid=opt_pred_mean,
              mean_range=[mean_min, mean_max])
 plt.savefig(FIG_DIR + '/GPiG_posterior.png', bbox_inches='tight')
 
-# Prediction performance metrics
-opt_rmspe = rmspe(preds=bnn_optim_preds[:, holdout_inds],
-                  obs=y_holdout,
-                  return_all=False)
-opt_coverage = perc_coverage(preds=bnn_optim_preds[:, holdout_inds],
-                             obs=y_holdout,
-                             pred_var=opt_holdout_var,
-                             percent=coverage_perc,
-                             return_all=False)
-opt_score = interval_score(preds=bnn_optim_preds[:, holdout_inds],
-                           obs=y_holdout,
-                           pred_var=opt_holdout_var,
-                           alpha=score_alpha,
-                           return_all=False)
-print('Prediction performance metrics for optimised GPi-G BNN')
+# Prediction performance metrics for long-range interpolation
+opt_rmspe_inside = rmspe(preds=bnn_optim_preds[:, inside_inds],
+                         obs=y_inside,
+                         return_all=False)
+opt_coverage_inside = perc_coverage(preds=bnn_optim_preds[:, inside_inds],
+                                    obs=y_inside,
+                                    pred_var=opt_var_test_inside,
+                                    percent=coverage_perc,
+                                    return_all=False)
+opt_score_inside = interval_score(preds=bnn_optim_preds[:, inside_inds],
+                                  obs=y_inside,
+                                  pred_var=opt_var_test_inside,
+                                  alpha=score_alpha,
+                                  return_all=False)
+print('Prediction performance metrics for GPi-G BNN (long-range interpolation)')
 print('RMSPE: {}\n{}-Percent Coverage: {}\nInterval Score (alpha = {}): {}'
-      .format(opt_rmspe, coverage_perc, opt_coverage, score_alpha, opt_score))
+      .format(opt_rmspe_inside, coverage_perc, opt_coverage_inside, score_alpha, opt_score_inside))
 
-to_save = {'opt_rmspe': opt_rmspe,
-           'opt_coverage': opt_coverage,
-           'opt_score': opt_score}
+# Prediction performance metrics for short-range interpolation
+opt_rmspe_edge = rmspe(preds=bnn_optim_preds[:, test_edge_inds],
+                       obs=y_edge,
+                       return_all=False)
+opt_coverage_edge = perc_coverage(preds=bnn_optim_preds[:, test_edge_inds],
+                                  obs=y_edge,
+                                  pred_var=opt_var_test_edge,
+                                  percent=coverage_perc,
+                                  return_all=False)
+opt_score_edge = interval_score(preds=bnn_optim_preds[:, test_edge_inds],
+                                obs=y_edge,
+                                pred_var=opt_var_test_edge,
+                                alpha=score_alpha,
+                                return_all=False)
+print('Prediction performance metrics for GPi-G BNN (short-range interpolation)')
+print('RMSPE: {}\n{}-Percent Coverage: {}\nInterval Score (alpha = {}): {}'
+      .format(opt_rmspe_edge, coverage_perc, opt_coverage_edge, score_alpha, opt_score_edge))
+
+to_save = {'opt_rmspe_inside': opt_rmspe_inside,
+           'opt_coverage_inside': opt_coverage_inside,
+           'opt_score_inside': opt_score_inside,
+           'opt_rmspe_edge': opt_rmspe_edge,
+           'opt_coverage_edge': opt_coverage_edge,
+           'opt_score_edge': opt_score_edge}
 pickle.dump(to_save, stage2_file)
 
 # Save all parameter settings for stage 1 code
