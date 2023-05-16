@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from copy import deepcopy
 
 from ..activation_fns import *
 from ..layers.hierarchical_layer import HierarchicalLayer
@@ -88,8 +89,8 @@ class HierarchicalNet(nn.Module):
         """
         # Apply RBFs to network input
         embedding_layer = list(self.layers)[0]
-        X_RBF = embedding_layer(X)
-        X = self.activation_fn(X_RBF)
+        X = embedding_layer(X)
+        X_RBF = deepcopy(X)
 
         # Propagate input through hidden layers, applying activations
         for layer in list(self.layers)[1:]:
@@ -109,8 +110,8 @@ class HierarchicalNet(nn.Module):
         """
         # Apply RBFs to network input
         embedding_layer = list(self.layers)[0]
-        X_RBF = embedding_layer(X)
-        X = self.activation_fn(X_RBF)
+        X = embedding_layer(X)
+        X_RBF = deepcopy(X)
 
         # Propagate input through hidden layers, applying activations
         for layer in list(self.layers)[1:]:

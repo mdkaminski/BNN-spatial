@@ -107,7 +107,7 @@ class GaussianNet(nn.Module):
             if 'embedding' in name:
                 X = layer(X)
                 X_RBF = deepcopy(X)
-            if 'hidden' in name:
+            elif 'hidden' in name:
                 X = self.activation_fn(layer(X, X_RBF))
             elif 'batch_norm' in name:
                 X = layer(X)

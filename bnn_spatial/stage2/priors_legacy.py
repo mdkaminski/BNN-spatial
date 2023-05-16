@@ -1,11 +1,12 @@
-"""
-Prior modules
-"""
+"""Defines prior modules."""
 
+import copy
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as dist
+import math
 
 
 class PriorModule(nn.Module):
@@ -38,6 +39,30 @@ class PriorModule(nn.Module):
 Gaussian Prior (Fixed and GPi-G)
 """
 
+class NSGaussianPrior(PriorModule):
+    def __init__(self, mu=0.0, std=1.0):
+        """
+        Child class for Gaussian prior over the standardised Z parameters (nonstationary case).
+
+        :param mu: float, mean for all parameters
+        :param std: float, std dev for all parameters
+        """
+        super(NSGaussianPrior, self).__init__()
+        self.mu = mu
+        self.std = std
+
+    def logp(self, net, test_input=None):
+        """
+        Compute log joint prior.
+
+        :param net: nn.Module, the input network to be evaluated
+        :return: torch.Tensor, log joint prior
+        """
+        res = 0.
+        for name, param in net.named_parameters():  # each param is a tensor of Zw or Zb values
+            res -= 0.5 * torch.sum(param ** 2)
+        return res
+
 class FixedGaussianPrior(PriorModule):
     def __init__(self, mu=0.0, std=1.0):
         """
@@ -59,8 +84,6 @@ class FixedGaussianPrior(PriorModule):
         """
         res = 0.
         for name, param in net.named_parameters():  # each param is a tensor of weights/biases
-            if 'batch_norm' in name:
-                continue
             var = self.std ** 2
             res -= 0.5 * torch.sum((param - self.mu) ** 2) / var
         return res
@@ -117,22 +140,20 @@ class OptimGaussianPrior(PriorModule):
 
         if '.W' in name:
             if name.replace('.W', '.W_rho_coeffs') in self.params.keys():
-                std = F.softplus(
-                    torch.tensordot(rbf, self.params[name.replace('.W', '.W_rho_coeffs')], dims=([1], [0]))).squeeze()
+                std = F.softplus(rbf @ self.params[name.replace('.W', '.W_rho_coeffs')]).squeeze()
             elif name.replace('.W', '.W_rho') in self.params.keys():
                 std = F.softplus(self.params[name.replace('.W', '.W_rho')])
             if name.replace('.W', '.W_mu_coeffs') in self.params.keys():
-                mu = torch.tensordot(rbf, self.params[name.replace('.W', '.W_mu_coeffs')], dims=([1], [0])).squeeze()
+                mu = (rbf @ self.params[name.replace('.W', '.W_mu_coeffs')]).squeeze()
             elif name.replace('.W', '.W_mu') in self.params.keys():
                 mu = self.params[name.replace('.W', '.W_mu')]
         elif '.b' in name:
             if name.replace('.b', '.b_rho_coeffs') in self.params.keys():
-                std = F.softplus(
-                    torch.tensordot(rbf, self.params[name.replace('.b', '.b_rho_coeffs')], dims=([1], [0]))).squeeze()
+                std = F.softplus(rbf @ self.params[name.replace('.b', '.b_rho_coeffs')]).squeeze()
             elif name.replace('.b', '.b_rho') in self.params.keys():
                 std = F.softplus(self.params[name.replace('.b', '.b_rho')])
             if name.replace('.b', '.b_mu_coeffs') in self.params.keys():
-                mu = torch.tensordot(rbf, self.params[name.replace('.b', '.b_mu_coeffs')], dims=([1], [0])).squeeze()
+                mu = (rbf @ self.params[name.replace('.b', '.b_mu_coeffs')]).squeeze()
             elif name.replace('.b', '.b_mu') in self.params.keys():
                 mu = self.params[name.replace('.b', '.b_mu')]
 
@@ -148,13 +169,11 @@ class OptimGaussianPrior(PriorModule):
         """
         res = 0.
         for name, param in net.named_parameters():  # param tensors contain weights and biases
-            if 'batch_norm' in name:
-                continue
             mu, std = self._get_params_by_name(name, test_input)
             if std is None:
                 continue
             var = std ** 2
-            res -= 0.5 * torch.sum((param - mu) ** 2 / var)
+            res -= 0.5 * torch.sum((param - mu) ** 2) / var
         return res
 
 """
@@ -206,8 +225,6 @@ class FixedHierarchicalPrior(PriorModule):
         [1] Tran et al. 2022 (All you need is a good functional prior for Bayesian deep learning)
         """
         for name, param in net.named_parameters():
-            if 'batch_norm' in name:
-                continue
             if ('.W' in name) or ('.b' in name):
                 sumcnt = param.detach().numel()  # add to shape to obtain posterior shape
                 sumsqr = (param.detach() ** 2).sum().item()  # add to rate to obtain posterior rate
@@ -228,8 +245,6 @@ class FixedHierarchicalPrior(PriorModule):
         :param net: nn.Module, input network to be initialised
         """
         for name, param in net.named_parameters():
-            if 'batch_norm' in name:
-                continue
             if '.W' in name:
                 self.params[name.replace('.W', '.W_std')] = self._sample_std(self.shape, self.rate)
             elif '.b' in name:
@@ -261,13 +276,11 @@ class FixedHierarchicalPrior(PriorModule):
         """
         res = 0.
         for name, param in net.named_parameters():
-            if 'batch_norm' in name:
-                continue
             mu, std = self._get_params_by_name(name)
             if std is None:
                 continue
             var = std ** 2
-            res -= 0.5 * torch.sum((param - mu) ** 2 / var)
+            res -= 0.5 * torch.sum((param - mu) ** 2) / var
         return res
 
 class OptimHierarchicalPrior(PriorModule):
@@ -332,36 +345,26 @@ class OptimHierarchicalPrior(PriorModule):
             rbf = self.rbf[int(test_input), :].reshape(1, -1)
 
         for name, param in net.named_parameters():
-            if 'batch_norm' in name:
-                continue
             if ('.W' in name) or ('.b' in name):
                 sumcnt = param.detach().numel()
                 sumsqr = (param.detach() ** 2).sum().item()
 
                 if '.W' in name:
                     if name.replace('.W', '.W_shape_coeffs') in self.params.keys():
-                        shape = F.softplus(
-                            torch.tensordot(rbf, self.params[name.replace('.W', '.W_shape_coeffs')],
-                                            dims=([1], [0]))).squeeze()
+                        shape = F.softplus(rbf @ self.params[name.replace('.W', '.W_shape_coeffs')]).squeeze()
                     elif name.replace('.W', '.W_shape') in self.params.keys():
                         shape = F.softplus(self.params[name.replace('.W', '.W_shape')])
                     if name.replace('.W', '.W_rate_coeffs') in self.params.keys():
-                        rate = F.softplus(
-                            torch.tensordot(rbf, self.params[name.replace('.W', '.W_rate_coeffs')],
-                                            dims=([1], [0]))).squeeze()
+                        rate = F.softplus(rbf @ self.params[name.replace('.W', '.W_rate_coeffs')]).squeeze()
                     elif name.replace('.W', '.W_rate') in self.params.keys():
                         rate = F.softplus(self.params[name.replace('.W', '.W_rate')])
                 elif '.b' in name:
                     if name.replace('.b', '.b_shape_coeffs') in self.params.keys():
-                        shape = F.softplus(
-                            torch.tensordot(rbf, self.params[name.replace('.b', '.b_shape_coeffs')],
-                                            dims=([1], [0]))).squeeze()
+                        shape = F.softplus(rbf @ self.params[name.replace('.b', '.b_shape_coeffs')]).squeeze()
                     elif name.replace('.b', '.b_shape') in self.params.keys():
                         shape = F.softplus(self.params[name.replace('.b', '.b_shape')])
                     if name.replace('.b', '.b_rate_coeffs') in self.params.keys():
-                        rate = F.softplus(
-                            torch.tensordot(rbf, self.params[name.replace('.b', '.b_rate_coeffs')],
-                                            dims=([1], [0]))).squeeze()
+                        rate = F.softplus(rbf @ self.params[name.replace('.b', '.b_rate_coeffs')]).squeeze()
                     elif name.replace('.b', '.b_rate') in self.params.keys():
                         rate = F.softplus(self.params[name.replace('.b', '.b_rate')])
 
@@ -386,33 +389,23 @@ class OptimHierarchicalPrior(PriorModule):
             rbf = self.rbf[int(test_input), :].reshape(1, -1)
 
         for name, param in net.named_parameters():
-            if 'batch_norm' in name:
-                continue
             if '.W' in name:
                 if name.replace('.W', '.W_shape_coeffs') in self.params.keys():
-                    shape = F.softplus(
-                        torch.tensordot(rbf, self.params[name.replace('.W', '.W_shape_coeffs')],
-                                        dims=([1], [0]))).squeeze()
+                    shape = F.softplus(rbf @ self.params[name.replace('.W', '.W_shape_coeffs')]).squeeze()
                 elif name.replace('.W', '.W_shape') in self.params.keys():
                     shape = F.softplus(self.params[name.replace('.W', '.W_shape')])
                 if name.replace('.W', '.W_rate_coeffs') in self.params.keys():
-                    rate = F.softplus(
-                        torch.tensordot(rbf, self.params[name.replace('.W', '.W_rate_coeffs')],
-                                        dims=([1], [0]))).squeeze()
+                    rate = F.softplus(rbf @ self.params[name.replace('.W', '.W_rate_coeffs')]).squeeze()
                 elif name.replace('.W', '.W_rate') in self.params.keys():
                     rate = F.softplus(self.params[name.replace('.W', '.W_rate')])
                 self.params[name.replace('.W', '.W_std')] = self._sample_std(shape, rate)
             elif '.b' in name:
                 if name.replace('.b', '.b_shape_coeffs') in self.params.keys():
-                    shape = F.softplus(
-                        torch.tensordot(rbf, self.params[name.replace('.b', '.b_shape_coeffs')],
-                                        dims=([1], [0]))).squeeze()
+                    shape = F.softplus(rbf @ self.params[name.replace('.b', '.b_shape_coeffs')]).squeeze()
                 elif name.replace('.b', '.b_shape') in self.params.keys():
                     shape = F.softplus(self.params[name.replace('.b', '.b_shape')])
                 if name.replace('.b', '.b_rate_coeffs') in self.params.keys():
-                    rate = F.softplus(
-                        torch.tensordot(rbf, self.params[name.replace('.b', '.b_rate_coeffs')],
-                                        dims=([1], [0]))).squeeze()
+                    rate = F.softplus(rbf @ self.params[name.replace('.b', '.b_rate_coeffs')]).squeeze()
                 elif name.replace('.b', '.b_rate') in self.params.keys():
                     rate = F.softplus(self.params[name.replace('.b', '.b_rate')])
                 self.params[name.replace('.b', '.b_std')] = self._sample_std(shape, rate)
@@ -435,14 +428,14 @@ class OptimHierarchicalPrior(PriorModule):
             if name.replace('.W', '.W_std') in self.params.keys():
                 std = self.params[name.replace('.W', '.W_std')]
             if name.replace('.W', '.W_mu_coeffs') in self.params.keys():
-                mu = torch.tensordot(rbf, self.params[name.replace('.W', '.W_mu_coeffs')], dims=([1], [0])).squeeze()
+                mu = (rbf @ self.params[name.replace('.W', '.W_mu_coeffs')]).squeeze()
             elif name.replace('.W', '.W_mu') in self.params.keys():
                 mu = self.params[name.replace('.W', '.W_mu')]
         elif '.b' in name:
             if name.replace('.b', '.b_std') in self.params.keys():
                 std = self.params[name.replace('.b', '.b_std')]
             if name.replace('.b', '.b_mu_coeffs') in self.params.keys():
-                mu = torch.tensordot(rbf, self.params[name.replace('.b', '.b_mu_coeffs')], dims=([1], [0])).squeeze()
+                mu = (rbf @ self.params[name.replace('.b', '.b_mu_coeffs')]).squeeze()
             elif name.replace('.b', '.b_mu') in self.params.keys():
                 mu = self.params[name.replace('.b', '.b_mu')]
 
@@ -457,12 +450,10 @@ class OptimHierarchicalPrior(PriorModule):
         """
         res = 0.
         for name, param in net.named_parameters():
-            if 'batch_norm' in name:
-                continue
             mu, std = self._get_params_by_name(name, test_input)
             if std is None:
                 continue
             var = std ** 2
-            res -= 0.5 * torch.sum((param - mu) ** 2 / var)
+            res -= 0.5 * torch.sum((param - mu) ** 2) / var
         return res
 

@@ -1,7 +1,3 @@
-"""
-Implement BNN posterior inference with SGHMC
-"""
-
 import numpy as np
 import math
 import torch
@@ -20,7 +16,7 @@ from ..bnn.layers.embedding_layer import EmbeddingLayer
 
 class BayesNet:
     def __init__(self, net, likelihood, prior, sampling_method="adaptive_sghmc", n_gpu=0,
-                 normalise_input=False, normalise_output=False):
+                 normalise_input=False, normalise_output=True):
         """
         Bayesian neural network that uses stochastic gradient MCMC to sample from the posterior.
 
@@ -48,6 +44,7 @@ class BayesNet:
         self.nonstationary = False
         self.bnn_idxs = [0]
         self.grid_size = None
+        self.bnn_loc = None
 
         # MCMC sampling settings
         self.sampling_method = sampling_method
@@ -82,7 +79,7 @@ class BayesNet:
 
     def make_nonstationary(self, grid_height, grid_width):
         """
-        Enable the posterior BNN to model nonstationarity, via Bayesian model averaging.
+        Enable the posterior BNN to model nonstationarity.
 
         :param grid_height: int, height of grid of spatial locations where SGHMC is applied
         :param grid_width: int, width of grid of spatial locations where SGHMC is applied
@@ -92,21 +89,14 @@ class BayesNet:
         self.nonstationary = True
         self.grid_size = grid_height * grid_width
 
+        # Obtain spatial coordinates corresponding to SGHMC locations
         domain = self.domain.detach().cpu()
         x1_range = domain[:, 0].unique(sorted=True).numpy()
         x2_range = domain[:, 1].unique(sorted=True).numpy()
         x1_len = len(x1_range)
         x2_len = len(x2_range)
-
-        # Obtain indices of the boundaries between S_i subregions
-        x1_bdry = np.int_(np.round(np.linspace(0, x1_len, grid_width + 1)))
-        x2_bdry = np.int_(np.round(np.linspace(0, x2_len, grid_height + 1)))
-
-        # Obtain indices of the centroids in each S_i subregion
-        x1_idxs = np.array([(x1_bdry[i] + x1_bdry[i+1])//2 for i in range(grid_width)])
-        x2_idxs = np.array([(x2_bdry[i] + x2_bdry[i+1])//2 for i in range(grid_height)])
-
-        # Obtain spatial coordinates corresponding to SGHMC locations
+        x1_idxs = np.int_(np.round(np.linspace(0, x1_len, grid_width + 2)[1:-1]))
+        x2_idxs = np.int_(np.round(np.linspace(0, x2_len, grid_height + 2)[1:-1]))
         x1_subset = x1_range[x1_idxs]
         x2_subset = x2_range[x2_idxs]
         x1_coords, x2_coords = np.meshgrid(x1_subset, x2_subset)
@@ -162,32 +152,29 @@ class BayesNet:
         prior = self.prior_module(self.net, test_input)
         return prior / n_train
 
-    def _initialize_sampler(self, dataset_size, num_steps, lr=1e-2, mdecay=0.05, num_burn_in_steps=3000,
-                            num_cycles=4, epsilon=1e-10):
+    def _initialize_sampler(self, n_train, lr=1e-2, mdecay=0.05, num_burn_in_steps=3000, epsilon=1e-10):
         """
         Initialize a stochastic gradient MCMC sampler.
 
-        :param dataset_size: int, size of training set
-        :param num_steps: int, total number of MCMC sampling steps
+        :param n_train: int, size of training set
         :param lr: float, learning rate
         :param mdecay: float, momentum decay
         :param num_burn_in_steps: int, number of burn-in steps to perform (given to the sampler if it supports special
             burn-in specific behaviour, such as that of adaptive SGHMC
-        :param num_cycles: int, number of cycles for cyclical SGHMC sampler
         :param epsilon: float, small positive number added for numerical stability
         """
         dtype = np.float32  # originally np.float32
         self.sampler_params = {}
 
-        self.sampler_params['scale_grad'] = dtype(dataset_size)  # multiplies the mini-batch gradient
+        self.sampler_params['scale_grad'] = dtype(n_train)  # multiplies the mini-batch gradient
         self.sampler_params['lr'] = dtype(lr)
         self.sampler_params['mdecay'] = dtype(mdecay)
 
-        if self.sampling_method == 'adaptive_sghmc':
+        if self.sampling_method == "adaptive_sghmc":
             self.sampler_params['num_burn_in_steps'] = num_burn_in_steps
             self.sampler_params['epsilon'] = dtype(epsilon)
             self.sampler = AdaptiveSGHMC(self.net.parameters(), **self.sampler_params)
-        elif self.sampling_method == 'sghmc':
+        elif self.sampling_method == "sghmc":
             self.sampler = SGHMC(self.net.parameters(), **self.sampler_params)
 
         # Note: net.parameters() is a generator which can be iterated through to obtain parameter tensors.
@@ -202,25 +189,13 @@ class BayesNet:
         n_test = x_test.shape[0]  # number of test inputs for prediction
         n_burn = self.len_sampled_chain - self.len_pred_chain  # number of burn-in samples; used later
 
-        if isinstance(x_test, np.ndarray):
-            x_test = torch.from_numpy(x_test).float().to(self.device)
-        else:
-            x_test = x_test.float().to(self.device)
-
-        if self.embedding_layer is not None:
-            if len(x_test.shape) == 1:
-                x_test = x_test.unsqueeze(1)
-            input_test = self.embedding_layer(x_test)
-        else:
-            input_test = x_test
-
         # Normalise the input data
+        if isinstance(x_test, torch.Tensor):
+            x_test = x_test.detach().cpu().numpy()
         if self.do_normalise_input:
-            input_test = input_test.detach().cpu().numpy()
-            input_test_, *_ = zscore_normalisation(input_test, self.x_mean, self.x_std)
-            input_test_ = torch.from_numpy(input_test_).float().to(self.device)
-        else:
-            input_test_ = input_test.float().to(self.device)
+            x_test, *_ = zscore_normalisation(x_test, self.x_mean, self.x_std)
+        x_test_ = torch.from_numpy(x_test).float().to(self.device)
+        rbf_test_ = self.embedding_layer(x_test_)
 
         def network_predict(test_input, weights):
             """
@@ -237,13 +212,13 @@ class BayesNet:
 
         # Obtain predictions for each test input in nonstationary (first) or stationary (second) case
         if self.nonstationary:
-            bnn_x_test = x_test[self.bnn_idxs, :]  # trained BNN locations
+            bnn_x_test_ = x_test_[self.bnn_idxs, :]  # trained BNN locations
 
             start_time = time.perf_counter()
 
             # Compute coefficients in convex combination
-            bnn_x = torch.tile(bnn_x_test, (n_test, 1))  # behaves like np.tile
-            pred_x = torch.repeat_interleave(x_test, repeats=self.grid_size, dim=0)  # behaves like np.repeat
+            bnn_x = torch.tile(bnn_x_test_, (n_test, 1))  # behaves like np.tile
+            pred_x = torch.repeat_interleave(x_test_, repeats=self.grid_size, dim=0)  # behaves like np.repeat
             dist = torch.norm((bnn_x - pred_x), dim=1).squeeze()  # distances from BNN locations
             dist_bnn = torch.empty(n_test, self.grid_size)  # reshaped distances, (# test inputs, # trained BNNs)
             for g in range(self.grid_size):
@@ -255,7 +230,7 @@ class BayesNet:
             if debug:
                 print('distances from bnn locations: {}'.format(dist))
                 print('reshaped distances from bnn locations: {}'.format(dist_bnn))
-                print('trained bnn locations: {}'.format(bnn_x_test))
+                print('trained bnn locations: {}'.format(bnn_x_test_))
                 print('convex coefficients: {}'.format(weights_norm))
 
             mid_time = time.perf_counter()
@@ -264,7 +239,7 @@ class BayesNet:
             preds_all_bnn = np.empty((self.grid_size, self.len_sampled_chain * self.num_chains, n_test))
             for gg in range(self.grid_size):
                 print('Obtaining predictions for grid point # {}/{}'.format(gg+1, self.grid_size))
-                preds_all_bnn[gg, :, :] = np.array([network_predict(input_test_, weights)
+                preds_all_bnn[gg, :, :] = np.array([network_predict(rbf_test_, weights)
                                                    for weights in self.sampled_weights[:, gg]])
 
                 # To double-check orientation of the BNN grid
@@ -285,15 +260,13 @@ class BayesNet:
             runif = np.random.random((n_test, self.len_sampled_chain * self.num_chains))  # random [0,1] number
             preds_all = np.empty((self.len_sampled_chain * self.num_chains, n_test))
             """
-            # Method 1
             for ss in range(n_test):
                 for cc in range(self.len_sampled_chain * self.num_chains):
                     for gg in range(self.grid_size):
                         if runif[ss, cc] <= convex_cumul[ss, gg]:
                             preds_all[cc, ss] = preds_all_bnn[gg, cc, ss]
                             continue
-            """            
-            # Method 2 (more efficient)
+            """
             inserted_preds = np.zeros_like(preds_all)  # keep track of which predictions were sampled
             for ss in range(n_test):
                 for gg in range(self.grid_size):
@@ -314,7 +287,7 @@ class BayesNet:
             print('Time: {:.4f}s, {:.4f}s, {:.4f}s'.format(mid_time-start_time, mid2_time-mid_time, end_time-mid2_time))
         else:
             # Make predictions for each set of sampled weights (locationally invariant)
-            preds_all = np.array([network_predict(input_test_, weights) for weights in self.sampled_weights])
+            preds_all = np.array([network_predict(rbf_test_, weights) for weights in self.sampled_weights])
 
             # Extract predictions corresponding to retained sampled weights
             preds = np.empty((self.len_pred_chain * self.num_chains, n_test))
@@ -356,13 +329,17 @@ class BayesNet:
 
         return x_train_, y_train_
 
-    def sample_multi_chains(self, x_train, y_train, num_samples,
+    def sample_multi_chains(self,
+                            x_train,
+                            y_train,
+                            num_samples,
                             num_chains=1,
                             keep_every=100,
                             n_discarded=0,
                             num_burn_in_steps=3000,
                             lr=1e-2,
                             batch_size=32,
+                            epsilon=1e-10,
                             mdecay=0.05,
                             print_every_n_samples=10,
                             resample_prior_every=1000):
@@ -379,6 +356,7 @@ class BayesNet:
             burn-in specific behaviour, such as that of adaptive SGHMC)
         :param lr: float, learning rate
         :param batch_size: int, batch size
+        :param epsilon: float, small positive number added for numerical stability
         :param mdecay: float, momentum decay
         :param print_every_n_samples: int, interval at which to print statistics of sampling process
         :param resample_prior_every: int, number of sampling steps before resampling std devs of prior (for GPi-H)
@@ -386,9 +364,9 @@ class BayesNet:
         # Compile settings together for brevity
         sampling_configs = {
             "x_train": x_train, "y_train": y_train, "num_samples": num_samples, "keep_every": keep_every,
-            "n_discarded": n_discarded, "num_burn_in_steps": num_burn_in_steps, "batch_size": batch_size,
-            "mdecay": mdecay, "print_every_n_samples": print_every_n_samples,
-            "resample_prior_every": resample_prior_every, "lr": lr,
+            "n_discarded": n_discarded, "num_burn_in_steps": num_burn_in_steps, "lr": lr, "batch_size": batch_size,
+            "epsilon": epsilon, "mdecay": mdecay, "print_every_n_samples": print_every_n_samples,
+            "resample_prior_every": resample_prior_every
         }
 
         # Pre-allocate lists to improve performance (append causes performance issues)
@@ -417,12 +395,16 @@ class BayesNet:
         # Return lists containing sampled network parameters for all chains
         return self.sampled_weights, self.pred_weights
 
-    def train(self, x_train, y_train, num_samples,
+    def train(self,
+              x_train,
+              y_train,
+              num_samples,
               keep_every=100,
               n_discarded=0,
               num_burn_in_steps=3000,
               lr=1e-2,
               batch_size=32,
+              epsilon=1e-10,
               mdecay=0.05,
               print_every_n_samples=10,
               resample_prior_every=1000):
@@ -438,29 +420,31 @@ class BayesNet:
             burn-in specific behaviour, such as that of adaptive SGHMC)
         :param lr: float, learning rate
         :param batch_size: int, batch size
+        :param epsilon: float, small positive number added for numerical stability
         :param mdecay: float, momentum decay
         :param print_every_n_samples: int, interval at which to print statistics of sampling process
         :param resample_prior_every: int, number of sampling steps before resampling std devs of prior (for GPi-H)
         """
         n_discarded_all = n_discarded + num_burn_in_steps // keep_every
         n_train = x_train.shape[0]
-        if isinstance(x_train, np.ndarray):
-            x_train = torch.from_numpy(x_train).float().to(self.device)
+        if isinstance(x_train, torch.Tensor):
+            x_train = x_train.detach().cpu().numpy()
+        if isinstance(y_train, torch.Tensor):
+            y_train = y_train.detach().cpu().numpy()
+
+        # Prepare the training dataset (normalising if specified)
+        x_train, y_train = x_train.squeeze(), y_train.squeeze()
+        x_train_, y_train_ = self._normalise_data(x_train, y_train)
 
         # Compute RBF evaluations on training test inputs
         if self.embedding_layer is not None:
-            if len(x_train.shape) == 1:
-                x_train = x_train.unsqueeze(1)
-            input_train = self.embedding_layer(x_train)
+            if self.do_normalise_input:
+                raise Warning('Inputs are being normalised, which will alter the effect of the embedding layer.')
+            if len(x_train_.shape) == 1:
+                x_train_ = x_train_.unsqueeze(1)
+            input_train_ = self.embedding_layer(x_train_)
         else:
-            input_train = x_train
-
-        # Normalise the inputs and/or the outputs, as specified
-        if isinstance(input_train, torch.Tensor):
-            input_train = input_train.detach().cpu().numpy()
-        if isinstance(y_train, torch.Tensor):
-            y_train = y_train.detach().cpu().numpy()
-        input_train_, y_train_ = self._normalise_data(input_train, y_train)
+            input_train_ = x_train_
 
         # Initialise a data loader for training data (loops through training set batches infinitely)
         train_loader = inf_loop(data_utils.DataLoader(data_utils.TensorDataset(input_train_, y_train_),
@@ -497,7 +481,7 @@ class BayesNet:
                 num_sampled_weights = 0
                 num_pred_weights = 0
                 self.net.reset_parameters()
-                self._initialize_sampler(n_train, num_steps, lr, mdecay, num_burn_in_steps)
+                self._initialize_sampler(n_train, lr, mdecay, num_burn_in_steps, epsilon)
 
             x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
             x_batch = x_batch.view(y_batch.shape[0], -1)  # batch of training set inputs
@@ -513,10 +497,9 @@ class BayesNet:
 
             self.sampler.zero_grad()  # set gradients to zero (to prevent their accumulative addition)
             loss.backward()  # populate mini-batch gradient with derivatives dU/dp (U is loss)
-            #loss_lh.backward()
+            #loss_lh.backward(retain_graph=True)
             #loss_prior.backward()
             torch.nn.utils.clip_grad_value_(self.net.parameters(), 100.)
-            #torch.nn.utils.clip_grad_norm_(self.net.parameters(), 100.)
 
             # Note: clip_grad_norm_ computes norm of all gradients together, as if concatenated into a vector,
             #       and modifies the gradients in-place if their norm exceeds the limit (indicated to be 100)
