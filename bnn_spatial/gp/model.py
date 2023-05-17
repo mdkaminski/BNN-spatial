@@ -23,16 +23,16 @@ class GP(torch.nn.Module):
         self.X, self.Y, self.sn2 = None, None, None  # to be initialised with assign_data
         self.data_assigned = False  # status of whether data assigned
 
-    def cholesky_factor(self, matrix, jitter_level, multiplier=1.):
+    def cholesky_factor(self, matrix, jitter_level):
         """
         Compute lower Cholesky factor of given matrix, adding jitter for stability (prevent non-PD error).
 
         :param matrix: torch.Tensor, matrix subject to Cholesky decomposition
         :param jitter_level: float, jitter added for numerical stability
-        :param multiplier: float, factor to multiply jitter by if factorisation attempt fails
         :return: torch.Tensor, lower Cholesky factor of input matrix
         """
         jitter = torch.eye(matrix.shape[0], dtype=matrix.dtype, device=matrix.device) * jitter_level
+        multiplier = 1.
         while True:
             try:
                 L = torch.linalg.cholesky(matrix + multiplier * jitter)  # try to compute lower Cholesky factor
