@@ -9,19 +9,39 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 
 
 class GP(torch.nn.Module):
-    def __init__(self, kern, jitter_level=1e-6):
+    def __init__(self, kern, jitter=1e-8):
         """
         Implementation of GP prior, and posterior after incorporating data.
 
         :param kern: instance of Kern child, covariance function or kernel
-        :param jitter_level: float, for preventing non-PD error in Cholesky decompositions
+        :param jitter: float, jitter added to prevent non-PD error in Cholesky decompositions
         """
         super(GP, self).__init__()
         self.mean_function = base.Zero()  # always use zero mean
         self.kern = kern
-        self.jitter_level = jitter_level
+        self.jitter = jitter
         self.X, self.Y, self.sn2 = None, None, None  # to be initialised with assign_data
         self.data_assigned = False  # status of whether data assigned
+
+    def cholesky_factor(self, matrix, jitter_level, multiplier=1.):
+        """
+        Compute lower Cholesky factor of given matrix, adding jitter for stability (prevent non-PD error).
+
+        :param matrix: torch.Tensor, matrix subject to Cholesky decomposition
+        :param jitter_level: float, jitter added for numerical stability
+        :param multiplier: float, factor to multiply jitter by if factorisation attempt fails
+        :return: torch.Tensor, lower Cholesky factor of input matrix
+        """
+        jitter = torch.eye(matrix.shape[0], dtype=matrix.dtype, device=matrix.device) * jitter_level
+        while True:
+            try:
+                L = torch.linalg.cholesky(matrix + multiplier * jitter)  # try to compute lower Cholesky factor
+                break
+            except RuntimeError:
+                multiplier *= 2.
+                if float(multiplier) == float("inf"):
+                    raise RuntimeError("increase to inf jitter")
+        return L
 
     def sample_functions(self, X, n_samples):
         """
@@ -32,26 +52,14 @@ class GP(torch.nn.Module):
         :return: torch.Tensor, size (n_inputs, n_samples), with samples in columns
         """
         # X = X.reshape((-1, self.kern.input_dim))
-        mu = self.mean_function(X)  # compute mean at inputs X
-
-        var = self.kern.K(X)  # compute covariances at inputs X
-        jitter = torch.eye(mu.size(0), dtype=mu.dtype, device=mu.device) * self.jitter_level
-
-        # Ensure sufficient jitter for successful Cholesky factorisation
-        multiplier = 1
-        while True:
-            try:
-                L = torch.linalg.cholesky(var + multiplier * jitter)  # Cholesky factor for sampling
-                break
-            except RuntimeError as err:
-                multiplier *= 2.
-                if float(multiplier) == float("inf"):
-                    raise RuntimeError("increase to inf jitter")
+        mu = self.mean_function(X)  # compute mean vector for inputs X
+        var = self.kern.K(X)  # compute covariance matrix for inputs X
+        L = self.cholesky_factor(var, jitter_level=self.jitter)  # lower Cholesky factor of cov matrix
 
         # Populate (n_inputs, n_samples) tensor with random numbers drawn from standard normal
-        V = torch.randn(L.size(0), n_samples, dtype=L.dtype, device=L.device)
+        V = torch.randn(L.shape[0], n_samples, dtype=L.dtype, device=L.device)
 
-        # Generate output using Cholesky factor for sampling (using MultivariateNormal severely exhausts memory)
+        # Generate output using Cholesky factor for sampling
         return mu + torch.matmul(L, V)
 
     def assign_data(self, X, Y, sn2):
@@ -95,10 +103,10 @@ class GP(torch.nn.Module):
         K_st = self.kern.K(Xnew, self.X)
         K_ts = K_st.T
         K_ss = self.kern.K(Xnew)
-        K_tt = self.kern.K(self.X) + torch.eye(self.X.size(0), dtype=self.X.dtype, device=self.X.device) * self.sn2
+        K_tt = self.kern.K(self.X) + torch.eye(self.X.shape[0], dtype=self.X.dtype, device=self.X.device) * self.sn2
 
         # Compute predictive mean
-        L = torch.linalg.cholesky(K_tt).to(dtype=self.Y.dtype)
+        L = self.cholesky_factor(K_tt, jitter_level=self.jitter).to(dtype=self.Y.dtype)
         A0 = torch.linalg.solve(L, self.Y)
         A1 = torch.linalg.solve(L.T, A0).to(dtype=K_st.dtype)
         fmean = torch.mm(K_st, A1)
@@ -122,21 +130,9 @@ class GP(torch.nn.Module):
         if not self.data_assigned:
             raise Exception('Assign data first')
 
-        mu, var = self.predict_f(Xnew)
-        jitter = torch.eye(mu.size(0), dtype=mu.dtype, device=mu.device) * self.jitter_level
-
-        # Ensure sufficient jitter for successful Cholesky factorisation
-        multiplier = 1
-        while True:
-            try:
-                L = torch.linalg.cholesky(var + multiplier * jitter)  # Cholesky factor for sampling
-                break
-            except RuntimeError as err:
-                multiplier *= 2.
-                if float(multiplier) == float("inf"):
-                    raise RuntimeError("increase to inf jitter")
-
-        V = torch.randn(L.size(0), n_samples, dtype=L.dtype, device=L.device)
+        mu, var = self.predict_f(Xnew)  # compute mean vector and covariance matrix
+        L = self.cholesky_factor(var, jitter_level=self.jitter)  # lower Cholesky factor of cov matrix
+        V = torch.randn(L.shape[0], n_samples, dtype=L.dtype, device=L.device)  # sample using Cholesky factor
 
         return mu + torch.matmul(L, V)
 
@@ -160,7 +156,7 @@ class GP(torch.nn.Module):
         err_cov = sn2 * np.eye(n_train)  # compute measurement error covariance matrix
 
         K_tt = self.kern.K(X=self.X) + err_cov  # training set covariance matrix
-        L = np.linalg.cholesky(K_tt)  # lower Cholesky factor
+        L = self.cholesky_factor(K_tt, jitter_level=self.jitter)  # lower Cholesky factor of cov matrix
         A0 = np.linalg.solve(L, self.Y)
         A1 = np.linalg.solve(L.T, A0)
 
