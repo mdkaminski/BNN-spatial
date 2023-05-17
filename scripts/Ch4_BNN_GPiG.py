@@ -537,9 +537,6 @@ plt.savefig(FIG_DIR + '/std_chains.png', bbox_inches='tight')
 
 # Make predictions
 bnn_std_preds, bnn_std_preds_all = bayes_net_std.predict(Xtest_tensor)
-std_train_var = np.var(bnn_std_preds, axis=0)[inds]
-print('Fixed BNN predictive variance on training set (shape {}): mean {}'
-      .format(std_train_var.shape, std_train_var.mean()))
 
 # MCMC convergence diagnostics
 r_hat = compute_rhat(bnn_std_preds, sampling_configs["num_chains"])
@@ -682,9 +679,6 @@ for ckpt in mcmc_checkpoints:
 
     # Make predictions
     bnn_optim_preds, bnn_optim_preds_all = bayes_net_optim.predict(Xtest_tensor)  # preds have rows samples, cols traces
-    opt_train_var = np.var(bnn_optim_preds, axis=0)[inds]
-    print('GPi-G BNN predictive variance on training set (shape {}): mean {}'
-          .format(opt_train_var.shape, opt_train_var.mean()))
 
     # MCMC convergence diagnostics
     r_hat = compute_rhat(bnn_optim_preds, sampling_configs["num_chains"])
