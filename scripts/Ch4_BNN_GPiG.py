@@ -199,7 +199,7 @@ if not os.path.exists(os.path.join(OUT_DIR, "ckpts/it-{}.ckpt".format(mapper_num
                                starting_steps=inner_steps,
                                starting_lr=inner_lr,
                                continue_training=True)
-    w_hist = mapper.optimize(num_iters=mapper_num_iters,
+    w_hist = mapper.optimise(num_iters=mapper_num_iters,
                              n_samples=n_stochastic,  # originally 512
                              lr=outer_lr,
                              print_every=50)  # specify pre-training for Lipschitz neural net
@@ -587,7 +587,7 @@ mcmc_checkpoints = [10/50, 2, num_ckpt//2, num_ckpt]
 mcmc_checkpoints = [num_ckpt]
 for ckpt in mcmc_checkpoints:
 
-    # Load the optimized prior
+    # Load the optimised prior
     if ckpt != num_ckpt // 2:
         ckpt_path = os.path.join(OUT_DIR, "ckpts", "it-{}.ckpt".format(int(50*ckpt)))
     else:
