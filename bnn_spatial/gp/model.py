@@ -156,7 +156,7 @@ class GP(torch.nn.Module):
         if sn2 is None:
             sn2 = self.sn2
 
-        n_train = self.X.numel()  # compute training set size
+        n_train = self.X.shape[0]  # compute training set size
         err_cov = sn2 * np.eye(n_train)  # compute measurement error covariance matrix
 
         K_tt = self.kern.K(X=self.X) + err_cov  # training set covariance matrix
