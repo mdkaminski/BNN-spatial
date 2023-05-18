@@ -56,6 +56,7 @@ class GP(torch.nn.Module):
         :return: torch.Tensor, size (n_inputs, n_samples), with samples in columns
         """
         # X = X.reshape((-1, self.kern.input_dim))
+        X = X.to(dtype=torch.float64)
         mu = self.mean_function(X)  # compute mean vector for inputs X
         var = self.kern.K(X)  # compute covariance matrix for inputs X
         L = self.cholesky_factor(var, jitter_level=self.jitter)  # lower Cholesky factor of cov matrix
@@ -74,8 +75,8 @@ class GP(torch.nn.Module):
         :param Y: torch.Tensor, corresponding targets (observations)
         :param sn2: float, measurement error variance (could be initial estimate)
         """
-        self.X = X.cpu()
-        self.Y = Y.cpu()
+        self.X = X.cpu().to(dtype=torch.float64)
+        self.Y = Y.cpu().to(dtype=torch.float64)
         self.sn2 = sn2
         self.data_assigned = True
 
@@ -101,7 +102,7 @@ class GP(torch.nn.Module):
             raise Exception('Assign data first')
 
         # Ensure devices match
-        Xnew = Xnew.to(self.X.device)
+        Xnew = Xnew.to(self.X.device, dtype=torch.float64)
 
         # Compute covariance matrices for test/training inputs (s for test, t for train)
         K_st = self.kern.K(Xnew, self.X)
@@ -110,7 +111,7 @@ class GP(torch.nn.Module):
         K_tt = self.kern.K(self.X) + torch.eye(self.X.shape[0], dtype=self.X.dtype, device=self.X.device) * self.sn2
 
         # Compute predictive mean
-        L = self.cholesky_factor(K_tt, jitter_level=self.jitter).to(dtype=self.Y.dtype)
+        L = self.cholesky_factor(K_tt.to(dtype=torch.float64), jitter_level=self.jitter).to(dtype=self.Y.dtype)
         A0 = torch.linalg.solve(L, self.Y)
         A1 = torch.linalg.solve(L.T, A0).to(dtype=K_st.dtype)
         fmean = torch.mm(K_st, A1)

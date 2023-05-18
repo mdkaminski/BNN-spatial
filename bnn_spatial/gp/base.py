@@ -5,6 +5,7 @@ Gaussian process kernel base classes
 import torch
 import numpy as np
 import torch.linalg as la
+import scipy.spatial as sps
 
 # Ran into problems using scipy's distance_matrix on GPU (25/08)
 
@@ -52,18 +53,23 @@ class Kernel(torch.nn.Module):
         # Compute distance matrix based on expanded expression
         dist = -2 * torch.matmul(X, X2.t())
         dist += Xs.view(-1, 1) + X2s.view(1, -1)
-        return dist
+        return torch.clamp(dist, min=0)  # avoid negative values, due to numerical error
 
-    def euclid_dist(self, X, X2=None):
+    def euclid_dist(self, X, X2=None, manual=True):
         """
         Compute Euclidean distance matrix (sqrt of above).
 
         :param X: torch.Tensor, first set of input points
         :param X2: torch.Tensor, second set of input points
+        :param manual: bool, specify if distance matrix is computed using manually built function
         :return: torch.Tensor, Euclidean distances between X and X2
         """
-        dist = torch.sqrt(self.square_dist(X, X2))
-        return dist
+        if manual:
+            return torch.sqrt(self.square_dist(X, X2))
+        device = X.device
+        if X2 is None:
+            X2 = X
+        return torch.from_numpy(sps.distance_matrix(X.cpu(), X2.cpu())).to(device)
 
     def disp_mx(self, X, X2=None):
         """
@@ -106,6 +112,9 @@ class Isotropic(Kernel):
         """
         r = self.euclid_dist(X, X2)
         return self.cov(r, **self.params)
+
+    def K2(self, X, X2=None):
+        return self.euclid_dist(X, X2)
 
 class Nonstationary(Kernel):
     def __init__(self, cov, x0, **params):
@@ -150,10 +159,14 @@ class Nonstationary(Kernel):
         Sigma_all = torch.permute(torch.Tensor([[s11, s12], [s21, s22]]), dims=(2, 0, 1)).to(disp.device)
         Sigma2_all = torch.permute(torch.Tensor([[s11_2, s12_2], [s21_2, s22_2]]), dims=(2, 0, 1)).to(disp.device)
 
+        # Restrict values to be non-negative, to handle numerical error
+        Sigma_all = torch.clamp(Sigma_all, min=0)
+        Sigma2_all = torch.clamp(Sigma2_all, min=0)
+
         # Compute arrays needed for each pairwise covariance calculations, shape (n1, n2, 2, 2)
         Sigma_i = torch.tile(torch.unsqueeze(Sigma_all, dim=1), dims=(1, n2, 1, 1))
         Sigma_j = torch.tile(torch.unsqueeze(Sigma2_all, dim=0), dims=(n1, 1, 1, 1))
-        Sigma_i_plus_j_on_2 = (Sigma_i + Sigma_j) / 2
+        Sigma_i_plus_j_on_2 = torch.clamp((Sigma_i + Sigma_j) / 2, min=0)
 
         # The below is an efficient way of constructing Q in (6)
         disp_T = torch.permute(disp, dims=(0, 1, 3, 2))  # transpose last two dimensions
