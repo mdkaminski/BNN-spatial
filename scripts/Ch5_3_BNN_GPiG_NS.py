@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pylab as plt
+import matplotlib.style as mplstyle
 import os, sys
 import pickle
 
@@ -39,6 +40,7 @@ plt.rcParams['axes.titlesize'] = 24
 #mpl.use('TkAgg')
 #mpl.rcParams['text.usetex'] = True
 #mpl.rcParams['text.latex.preamble'] = [r'\usepackage{amsmath}']
+mplstyle.use('fast')
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # set device to GPU if available
 
@@ -51,7 +53,7 @@ stage2_file = open(OUT_DIR + "/stage2.file", "wb")
 stage2_txt = open(FIG_DIR + "/stage2.txt", "w+")
 
 # Set seed (make results replicable)
-util.set_seed(1)
+#util.set_seed(1)
 
 # Specify BNN structure
 # hidden_dims = [81, 100, 100, 100]  # list of hidden layer dimensions
@@ -293,6 +295,7 @@ plt_checkpoints = np.unique([10/50, 1, 2] + list(range(4, num_ckpt, 4)) + [num_c
 plt_checkpoints.sort()  # ascending order by default
 opt_bnn_mean0 = None
 opt_bnn_sd0 = None
+plt_checkpoints = [num_ckpt]
 
 for ckpt in plt_checkpoints:
 
@@ -525,6 +528,10 @@ net = BlankNet(output_dim=1,
                hidden_dims=hidden_dims,
                activation_fn=transfer_fn).to(device)
 
+# Compare named parameters of the neural networks
+print('GaussianNet has named parameters:\n{}'.format([name for name, param in opt_bnn.named_parameters()]))
+print('BlankNet has named parameters:\n{}'.format([name for name, param in net.named_parameters()]))
+
 # Generate posterior BNN parameter samples with multiple chains of sampling
 bayes_net_std = BayesNet(net, likelihood, prior,
                          sampling_method=sampler,
@@ -553,7 +560,7 @@ std_chains_pred = np.zeros((2 * depth, n_chains * n_samples))
 
 # Populate the array containing all samples
 for k in range(n_samples_all_chains):
-    std_dict = std_weights[k]  # dictionary of name-tensor pairs for network parameters
+    std_dict = std_weights[k]  # network parameter dictionary
     W_tensors = list(std_dict.values())[0::2]
     b_tensors = list(std_dict.values())[1::2]
     for ll in range(2 * depth):
@@ -566,7 +573,7 @@ for k in range(n_samples_all_chains):
 
 # Populate the array only containing samples utilised for predictions
 for k in range(n_samples * n_chains):
-    std_dict = std_weights_pred[k]  # dictionary of name-tensor pairs for network parameters
+    std_dict = std_weights_pred[k]  # network parameter dictionary
     W_tensors = list(std_dict.values())[0::2]
     b_tensors = list(std_dict.values())[1::2]
     for ll in range(2 * depth):
@@ -662,7 +669,8 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
     # Load the optimized prior
     ckpt_path = os.path.join(OUT_DIR, "ckpts", "it-{}.ckpt".format(int(50*ckpt)))
-    prior = OptimGaussianPrior(saved_path=ckpt_path, rbf=rbf)  # use optimised prior on each parameter
+    #prior = OptimGaussianPrior(saved_path=ckpt_path, rbf=rbf)  # use optimised prior on each parameter
+    prior = FixedGaussianPrior(mu=0, std=1)
 
     # Obtain network parameter values (for plotting only)
     #opt_bnn.load_state_dict(torch.load(ckpt_path))
@@ -678,37 +686,40 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
     bayes_net_optim.make_nonstationary(grid_width=3,
                                        grid_height=3)
     bnn_idxs = bayes_net_optim.bnn_idxs  # order of bnn_idxs determines order of panels in plot_bnn_grid
+    grid_size = bayes_net_optim.grid_size
     optim_weights, optim_weights_pred = bayes_net_optim.sample_multi_chains(X, y, **sampling_configs)
 
     # Create arrays of MCMC samples (samples cols, parameters rows)
-    optim_chains = np.zeros((2 * depth, n_samples_all_chains))
-    optim_chains_pred = np.zeros((2 * depth, n_chains * n_samples))
+    optim_chains = np.zeros((2 * depth, n_samples_all_chains, grid_size))
+    optim_chains_pred = np.zeros((2 * depth, n_chains * n_samples, grid_size))
 
     # Populate the array containing all samples
-    for k in range(n_samples_all_chains):
-        optim_dict = optim_weights[k][0]  # dictionary of name-tensor pairs for network parameters (one location only)
-        W_tensors = list(optim_dict.values())[0::2]
-        b_tensors = list(optim_dict.values())[1::2]
-        for ll in range(2 * depth):
-            if ll % 2 == 0:
-                W_idx = tuple([0] * W_tensors[ll // 2].dim())
-                optim_chains[ll, k] = W_tensors[ll // 2][W_idx]  # use first weight entry
-            else:
-                b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
-                optim_chains[ll, k] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
+    for gg in range(grid_size):
+        for k in range(n_samples_all_chains):
+            optim_dict = optim_weights[gg][k]  # network parameter dictionary (one location only)
+            W_tensors = list(optim_dict.values())[0::2]
+            b_tensors = list(optim_dict.values())[1::2]
+            for ll in range(2 * depth):
+                if ll % 2 == 0:
+                    W_idx = tuple([0] * W_tensors[ll // 2].dim())
+                    optim_chains[ll, k, gg] = W_tensors[ll // 2][W_idx]  # use first weight entry
+                else:
+                    b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
+                    optim_chains[ll, k, gg] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
 
     # Populate the array only containing samples utilised for predictions
-    for k in range(n_chains * n_samples):
-        optim_dict = optim_weights_pred[k][0]  # dictionary of name-tensor pairs for network parameters
-        W_tensors = list(optim_dict.values())[0::2]
-        b_tensors = list(optim_dict.values())[1::2]
-        for ll in range(2 * depth):
-            if ll % 2 == 0:
-                W_idx = tuple([0] * W_tensors[ll // 2].dim())
-                optim_chains_pred[ll, k] = W_tensors[ll // 2][W_idx]  # use first weight entry
-            else:
-                b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
-                optim_chains_pred[ll, k] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
+    for gg in range(grid_size):
+        for k in range(n_chains * n_samples):
+            optim_dict = optim_weights[gg][k]  # network parameter dictionary (one location only)
+            W_tensors = list(optim_dict.values())[0::2]
+            b_tensors = list(optim_dict.values())[1::2]
+            for ll in range(2 * depth):
+                if ll % 2 == 0:
+                    W_idx = tuple([0] * W_tensors[ll // 2].dim())
+                    optim_chains_pred[ll, k, gg] = W_tensors[ll // 2][W_idx]  # use first weight entry
+                else:
+                    b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
+                    optim_chains_pred[ll, k, gg] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
 
     # Make predictions
     bnn_optim_preds, bnn_optim_preds_all, bnn_optim_grid, bnn_optim_grid_all \
@@ -717,14 +728,8 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
     # Check BNN locations
     print('BNN locations in test_tensor[bnn_idxs]\n{}'.format(test_tensor[bnn_idxs]))
 
-    grid_size = bnn_optim_grid.shape[0]
+    # Side length of BNN grid
     grid_len = int(np.sqrt(grid_size))
-
-    # Check tensor values
-    equal12 = np.sum(bnn_optim_grid[0, :, :] == bnn_optim_grid[1, :, :])
-    equal13 = np.sum(bnn_optim_grid[0, :, :] == bnn_optim_grid[2, :, :])
-    equal14 = np.sum(bnn_optim_grid[0, :, :] == bnn_optim_grid[3, :, :])
-    print('equal12 {}, equal13 {}, equal14 {}'.format(equal12,equal13,equal14))
 
     # MCMC convergence diagnostics
     print('Computing R-hat for each optimised BNN posterior')
@@ -774,25 +779,35 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
     if ckpt == num_ckpt:
 
-        #################
-        # Parameter plots
+        ##################
+        # Diagnostic plots
 
         # Trace plots of MCMC iterates
-        print('Plotting parameter traces (optimised BNN)')
-        plot_param_traces(param_chains=optim_chains,
-                          n_chains=n_chains,
-                          net_depth=depth,
-                          n_discarded=n_discarded,
-                          n_burn=n_burn_thin,
-                          trace_titles=trace_titles,
-                          legend_entries=legend_entries)
-        plt.savefig(FIG_DIR + '/optim_chains.png', bbox_inches='tight')
+        for gg in range(grid_size):
+            print('Plotting parameter traces (optimised BNN) for grid point # {}'.format(gg+1))
+            plot_param_traces(param_chains=optim_chains[:, :, gg],
+                              n_chains=n_chains,
+                              net_depth=depth,
+                              n_discarded=n_discarded,
+                              n_burn=n_burn_thin,
+                              trace_titles=trace_titles,
+                              legend_entries=legend_entries)
+            plt.savefig(FIG_DIR + '/optim_chains_{}.png'
+                        .format(tuple(np.round(test_array[bnn_idxs[gg], :], 2))), bbox_inches='tight')
 
-        ######################
-        # Network output plots
+            # Trace plot of network output at specified grid point
+            print('Plotting output traces (optimised BNN) for grid point # {}'.format(gg+1))
+            plot_output_traces(domain=test_tensor,
+                               preds=bnn_optim_grid_all[gg, :, :],
+                               n_chains=n_chains,
+                               n_discarded=n_discarded,
+                               n_burn=n_burn_thin,
+                               legend_entries=legend_entries)
+            plt.savefig(FIG_DIR + '/GPiG_posterior_trace_{}.png'
+                        .format(tuple(np.round(test_array[bnn_idxs[gg], :], 2))), bbox_inches='tight')
 
-        # Trace plot of network output at specified input point(s)
-        print('Plotting output traces (optimised BNN)')
+        # Trace plot of collated network output
+        print('Plotting output traces (Bayesian model average)')
         plot_output_traces(domain=test_tensor,
                            preds=bnn_optim_preds_all,
                            n_chains=n_chains,

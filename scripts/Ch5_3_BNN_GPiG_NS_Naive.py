@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pylab as plt
+import matplotlib.style as mplstyle
 import os, sys
 import pickle
 
@@ -39,6 +40,7 @@ plt.rcParams['axes.titlesize'] = 24
 #mpl.use('TkAgg')
 #mpl.rcParams['text.usetex'] = True
 #mpl.rcParams['text.latex.preamble'] = [r'\usepackage{amsmath}']
+mplstyle.use('fast')
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # set device to GPU if available
 
@@ -51,7 +53,7 @@ stage2_file = open(OUT_DIR + "/stage2.file", "wb")
 stage2_txt = open(FIG_DIR + "/stage2.txt", "w+")
 
 # Set seed (make results replicable)
-util.set_seed(1)
+#util.set_seed(1)
 
 # Specify BNN structure
 # hidden_dims = [81, 100, 100, 100]  # list of hidden layer dimensions
@@ -194,7 +196,8 @@ opt_bnn = GaussianNet(input_dim=2,
                       domain=test_tensor,
                       fit_means=False,
                       prior_per='layer',
-                      rbf_ls=rbf_ls).to(device)
+                      rbf_ls=rbf_ls,
+                      nonstationary=False).to(device)
 
 # Use a grid of `n_data` points for the measurement set (`n_data` specified in MapperWasserstein)
 data_generator = GridGenerator(-4, 4, input_dim=2)
@@ -292,6 +295,7 @@ plt_checkpoints = np.unique([10/50, 1, 2] + list(range(4, num_ckpt, 4)) + [num_c
 plt_checkpoints.sort()  # ascending order by default
 opt_bnn_mean0 = None
 opt_bnn_sd0 = None
+plt_checkpoints = [num_ckpt]
 
 for ckpt in plt_checkpoints:
 
@@ -524,6 +528,10 @@ net = BlankNet(output_dim=1,
                hidden_dims=hidden_dims,
                activation_fn=transfer_fn).to(device)
 
+# Compare named parameters of the neural networks
+print('GaussianNet has named parameters:\n{}'.format([name for name, param in opt_bnn.named_parameters()]))
+print('BlankNet has named parameters:\n{}'.format([name for name, param in net.named_parameters()]))
+
 # Generate posterior BNN parameter samples with multiple chains of sampling
 bayes_net_std = BayesNet(net, likelihood, prior,
                          sampling_method=sampler,
@@ -552,7 +560,7 @@ std_chains_pred = np.zeros((2 * depth, n_chains * n_samples))
 
 # Populate the array containing all samples
 for k in range(n_samples_all_chains):
-    std_dict = std_weights[k]  # dictionary of name-tensor pairs for network parameters
+    std_dict = std_weights[k]  # network parameter dictionary
     W_tensors = list(std_dict.values())[0::2]
     b_tensors = list(std_dict.values())[1::2]
     for ll in range(2 * depth):
@@ -565,7 +573,7 @@ for k in range(n_samples_all_chains):
 
 # Populate the array only containing samples utilised for predictions
 for k in range(n_samples * n_chains):
-    std_dict = std_weights_pred[k]  # dictionary of name-tensor pairs for network parameters
+    std_dict = std_weights_pred[k]  # network parameter dictionary
     W_tensors = list(std_dict.values())[0::2]
     b_tensors = list(std_dict.values())[1::2]
     for ll in range(2 * depth):
@@ -661,7 +669,8 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
     # Load the optimized prior
     ckpt_path = os.path.join(OUT_DIR, "ckpts", "it-{}.ckpt".format(int(50*ckpt)))
-    prior = OptimGaussianPrior(saved_path=ckpt_path, rbf=rbf)  # use optimised prior on each parameter
+    #prior = OptimGaussianPrior(saved_path=ckpt_path, rbf=rbf)  # use optimised prior on each parameter
+    prior = FixedGaussianPrior(mu=0, std=1)
 
     # Obtain network parameter values (for plotting only)
     #opt_bnn.load_state_dict(torch.load(ckpt_path))
@@ -674,84 +683,131 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
                                         rbf_dim=embed_width,
                                         domain=test_tensor,
                                         rbf_ls=rbf_ls)
+    bayes_net_optim.make_nonstationary(grid_width=3,
+                                       grid_height=3)
+    bnn_idxs = bayes_net_optim.bnn_idxs  # order of bnn_idxs determines order of panels in plot_bnn_grid
+    grid_size = bayes_net_optim.grid_size
     optim_weights, optim_weights_pred = bayes_net_optim.sample_multi_chains(X, y, **sampling_configs)
 
     # Create arrays of MCMC samples (samples cols, parameters rows)
-    optim_chains = np.zeros((2 * depth, n_samples_all_chains))
-    optim_chains_pred = np.zeros((2 * depth, n_chains * n_samples))
+    optim_chains = np.zeros((2 * depth, n_samples_all_chains, grid_size))
+    optim_chains_pred = np.zeros((2 * depth, n_chains * n_samples, grid_size))
 
     # Populate the array containing all samples
-    for k in range(n_samples_all_chains):
-        optim_dict = optim_weights[k]  # dictionary of name-tensor pairs for network parameters (one location only)
-        W_tensors = list(optim_dict.values())[0::2]
-        b_tensors = list(optim_dict.values())[1::2]
-        for ll in range(2 * depth):
-            if ll % 2 == 0:
-                W_idx = tuple([0] * W_tensors[ll // 2].dim())
-                optim_chains[ll, k] = W_tensors[ll // 2][W_idx]  # use first weight entry
-            else:
-                b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
-                optim_chains[ll, k] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
+    for gg in range(grid_size):
+        for k in range(n_samples_all_chains):
+            optim_dict = optim_weights[gg][k]  # network parameter dictionary (one location only)
+            W_tensors = list(optim_dict.values())[0::2]
+            b_tensors = list(optim_dict.values())[1::2]
+            for ll in range(2 * depth):
+                if ll % 2 == 0:
+                    W_idx = tuple([0] * W_tensors[ll // 2].dim())
+                    optim_chains[ll, k, gg] = W_tensors[ll // 2][W_idx]  # use first weight entry
+                else:
+                    b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
+                    optim_chains[ll, k, gg] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
 
     # Populate the array only containing samples utilised for predictions
-    for k in range(n_chains * n_samples):
-        optim_dict = optim_weights_pred[k]  # dictionary of name-tensor pairs for network parameters
-        W_tensors = list(optim_dict.values())[0::2]
-        b_tensors = list(optim_dict.values())[1::2]
-        for ll in range(2 * depth):
-            if ll % 2 == 0:
-                W_idx = tuple([0] * W_tensors[ll // 2].dim())
-                optim_chains_pred[ll, k] = W_tensors[ll // 2][W_idx]  # use first weight entry
-            else:
-                b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
-                optim_chains_pred[ll, k] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
+    for gg in range(grid_size):
+        for k in range(n_chains * n_samples):
+            optim_dict = optim_weights[gg][k]  # network parameter dictionary (one location only)
+            W_tensors = list(optim_dict.values())[0::2]
+            b_tensors = list(optim_dict.values())[1::2]
+            for ll in range(2 * depth):
+                if ll % 2 == 0:
+                    W_idx = tuple([0] * W_tensors[ll // 2].dim())
+                    optim_chains_pred[ll, k, gg] = W_tensors[ll // 2][W_idx]  # use first weight entry
+                else:
+                    b_idx = tuple([0] * b_tensors[(ll - 1) // 2].dim())
+                    optim_chains_pred[ll, k, gg] = b_tensors[(ll - 1) // 2][b_idx]  # use first bias entry
 
     # Make predictions
-    bnn_optim_preds, bnn_optim_preds_all = bayes_net_optim.predict(test_tensor)  # rows samples, cols traces
+    bnn_optim_preds, bnn_optim_preds_all, bnn_optim_grid, bnn_optim_grid_all \
+        = bayes_net_optim.predict(test_tensor)  # rows samples, cols traces
+
+    # Check BNN locations
+    print('BNN locations in test_tensor[bnn_idxs]\n{}'.format(test_tensor[bnn_idxs]))
+
+    # Side length of BNN grid
+    grid_len = int(np.sqrt(grid_size))
 
     # MCMC convergence diagnostics
+    print('Computing R-hat for each optimised BNN posterior')
+    r_hat_bnn = [compute_rhat(bnn_optim_grid[gg, :, :], sampling_configs["num_chains"])
+                 for gg in range(bnn_optim_grid.shape[0])]
+    print('Computing R-hat for collated chain of predictions')
     r_hat = compute_rhat(bnn_optim_preds, sampling_configs["num_chains"])
+    print('Computing mean and std deviation of R-hat values')
+    rhat_mean_each = [float(rhat.mean()) for rhat in r_hat_bnn]
+    rhat_sd_each = [float(rhat.std()) for rhat in r_hat_bnn]
+    rhat_mean_all = float(np.asarray(r_hat_bnn).mean())
+    rhat_sd_all = float(np.asarray(r_hat_bnn).std())
     rhat_mean_opt = float(r_hat.mean())
     rhat_sd_opt = float(r_hat.std())
-    print(r"R-hat: mean {:.4f} std {:.4f}".format(rhat_mean_opt, rhat_sd_opt))
+    print(r"Each BNN R-hat: mean {} std {}".format(rhat_mean_each, rhat_sd_each))
+    print(r"Average BNN R-hat: mean {:.4f} std {:.4f}".format(rhat_mean_all, rhat_sd_all))
+    print(r"Collated R-hat: mean {:.4f} std {:.4f}".format(rhat_mean_opt, rhat_sd_opt))
 
     if ckpt == num_ckpt:
-        to_save = {'rhat_mean_opt': rhat_mean_opt,
-                   'rhat_sd_opt': rhat_sd_opt}
+        to_save = {'bnn_locations': test_tensor[bnn_idxs],
+                   'bnn_indices': bnn_idxs,
+                   'rhat_mean_opt': rhat_mean_opt,
+                   'rhat_sd_opt': rhat_sd_opt,
+                   'rhat_mean_all': rhat_mean_all,
+                   'rhat_sd_all': rhat_sd_all,
+                   'rhat_mean_each': rhat_mean_each,
+                   'rhat_sd_each': rhat_sd_each}
         pickle.dump(to_save, stage2_file)
 
     # Resize array of predictions
     bnn_optim_preds_ = np.zeros((n_chains * n_samples, n_test_v, n_test_h))
+    bnn_optim_grid_ = np.zeros((grid_size, n_chains * n_samples, n_test_v, n_test_h))
     for ss in range(n_chains * n_samples):
         sample = bnn_optim_preds[ss, :]
         sample_ = sample.reshape(n_test_v, -1)
         bnn_optim_preds_[ss, :, :] = sample_
+        for gg in range(grid_size):
+            sample_g = bnn_optim_grid[gg, ss, :]
+            sample_g_ = sample_g.reshape(n_test_v, -1)
+            bnn_optim_grid_[gg, ss, :, :] = sample_g_
 
     # Obtain mean and std dev of samples
     opt_pred_mean = np.mean(bnn_optim_preds_, axis=0).squeeze()
     opt_pred_sd = np.std(bnn_optim_preds_, axis=0).squeeze()
+    opt_grid_mean = np.mean(bnn_optim_grid_, axis=1).squeeze()
+    opt_grid_sd = np.std(bnn_optim_grid_, axis=1).squeeze()
 
     if ckpt == num_ckpt:
 
-        #################
-        # Parameter plots
+        ##################
+        # Diagnostic plots
 
         # Trace plots of MCMC iterates
-        print('Plotting parameter traces (optimised BNN)')
-        plot_param_traces(param_chains=optim_chains,
-                          n_chains=n_chains,
-                          net_depth=depth,
-                          n_discarded=n_discarded,
-                          n_burn=n_burn_thin,
-                          trace_titles=trace_titles,
-                          legend_entries=legend_entries)
-        plt.savefig(FIG_DIR + '/optim_chains.png', bbox_inches='tight')
+        for gg in range(grid_size):
+            print('Plotting parameter traces (optimised BNN) for grid point # {}'.format(gg+1))
+            plot_param_traces(param_chains=optim_chains[:, :, gg],
+                              n_chains=n_chains,
+                              net_depth=depth,
+                              n_discarded=n_discarded,
+                              n_burn=n_burn_thin,
+                              trace_titles=trace_titles,
+                              legend_entries=legend_entries)
+            plt.savefig(FIG_DIR + '/optim_chains_{}.png'
+                        .format(tuple(np.round(test_array[bnn_idxs[gg], :], 2))), bbox_inches='tight')
 
-        ######################
-        # Network output plots
+            # Trace plot of network output at specified grid point
+            print('Plotting output traces (optimised BNN) for grid point # {}'.format(gg+1))
+            plot_output_traces(domain=test_tensor,
+                               preds=bnn_optim_grid_all[gg, :, :],
+                               n_chains=n_chains,
+                               n_discarded=n_discarded,
+                               n_burn=n_burn_thin,
+                               legend_entries=legend_entries)
+            plt.savefig(FIG_DIR + '/GPiG_posterior_trace_{}.png'
+                        .format(tuple(np.round(test_array[bnn_idxs[gg], :], 2))), bbox_inches='tight')
 
-        # Trace plot of network output at specified input point(s)
-        print('Plotting output traces (optimised BNN)')
+        # Trace plot of collated network output
+        print('Plotting output traces (Bayesian model average)')
         plot_output_traces(domain=test_tensor,
                            preds=bnn_optim_preds_all,
                            n_chains=n_chains,
@@ -784,6 +840,29 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
     plot_samples_2d(samples=bnn_optim_preds_,
                     extent=[-margin_h, margin_h, -margin_v, margin_v])
     plt.savefig(FIG_DIR + '/GPiG_posterior_samples_step{}.png'.format(int(50 * ckpt)), bbox_inches='tight')
+
+    # Plot final samples from each trained BNN
+    plot_bnn_grid(bnn_grid=bnn_optim_grid_[:, -1, :, :],
+                  domain=test_tensor,
+                  type='samples',
+                  bnn_idxs=bnn_idxs)
+    plt.savefig(FIG_DIR + '/GPiG_grid_samples_step{}.png'.format(int(50 * ckpt)), bbox_inches='tight')
+
+    # Plot mean of each trained BNN
+    plot_bnn_grid(bnn_grid=opt_grid_mean,
+                  domain=test_tensor,
+                  type='mean',
+                  bnn_idxs=bnn_idxs,
+                  obs=X)
+    plt.savefig(FIG_DIR + '/GPiG_grid_mean_step{}.png'.format(int(50 * ckpt)), bbox_inches='tight')
+
+    # Plot std dev of each trained BNN
+    plot_bnn_grid(bnn_grid=opt_grid_sd,
+                  domain=test_tensor,
+                  type='sd',
+                  bnn_idxs=bnn_idxs,
+                  obs=X)
+    plt.savefig(FIG_DIR + '/GPiG_grid_sd_step{}.png'.format(int(50 * ckpt)), bbox_inches='tight')
 
 # Obtain min/max for SD and mean, for consistent value ranges in plots
 sd_min_list = [np.min(gp_pred_sd), np.min(std_pred_sd), np.min(opt_pred_sd)]
