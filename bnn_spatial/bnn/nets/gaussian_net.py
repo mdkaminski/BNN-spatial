@@ -15,7 +15,7 @@ from ..layers.embedding_layer import EmbeddingLayer
 
 class GaussianNet(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dims, activation_fn, domain=None, prior_per='layer',
-                 fit_means=False, rbf_ls=1, batch_norm=False, nonstationary=False):
+                 fit_means=False, rbf_ls=1, nonstationary=False):
         """
         Implementation of BNN prior with Gaussian prior over parameters.
 
@@ -27,7 +27,6 @@ class GaussianNet(nn.Module):
         :param prior_per: str, indicates either one prior per `layer`, `parameter`, or `input`
         :param fit_means: bool, specify if means are fitted as parameters (set to zero otherwise)
         :param rbf_ls: float, lengthscale for embedding layer RBFs
-        :param batch_norm: bool, specify if batch normalisation is used
         :param nonstationary: bool, specify if spatial dependence is incorporated into hyperparameters
         """
         super().__init__()
@@ -50,8 +49,6 @@ class GaussianNet(nn.Module):
                                                              prior_per=prior_per,
                                                              fit_means=fit_means,
                                                              nonstationary=nonstationary))
-            if batch_norm:
-                self.layers.add_module('batch_norm_0', nn.BatchNorm1d(hidden_dims[0]))
             rbf_dim = None
         else:
             rbf_dim = hidden_dims[0]
@@ -73,8 +70,6 @@ class GaussianNet(nn.Module):
                                                                         prior_per=prior_per,
                                                                         fit_means=fit_means,
                                                                         nonstationary=nonstationary))
-            if batch_norm:
-                self.layers.add_module('batch_norm_{}'.format(i), nn.BatchNorm1d(hidden_dims[i]))
 
         # Initialise output layer
         self.layers.add_module('output', GaussianLayer(input_dim=hidden_dims[-1],
@@ -109,8 +104,6 @@ class GaussianNet(nn.Module):
                 X_RBF = deepcopy(X)
             elif 'hidden' in name:
                 X = self.activation_fn(layer(X, X_RBF))
-            elif 'batch_norm' in name:
-                X = layer(X)
             elif 'output' in name:
                 X = layer(X, X_RBF)
 
@@ -134,10 +127,6 @@ class GaussianNet(nn.Module):
                 X_RBF = deepcopy(X)
             if 'hidden' in name:
                 X = self.activation_fn(layer.sample_predict(X, n_samples, X_RBF))
-            elif 'batch_norm' in name:
-                # (n_samples, batch_size, layer_dim) -> (batch_size, layer_dim, n_samples) for batch_norm layer
-                X = layer(X.permute(1, 2, 0))
-                X = X.permute(2, 0, 1)  # restore original dimensions
             elif 'output' in name:
                 X = layer.sample_predict(X, n_samples, X_RBF)
 
@@ -154,8 +143,6 @@ class GaussianNet(nn.Module):
         W_std_list = []
         b_std_list = []
         for name in self.state_dict().keys():
-            if 'batch_norm' in name:
-                continue
             param = self.state_dict()[name]
             if '.W' in name:
                 W_std = round(float(F.softplus(param)), 6)

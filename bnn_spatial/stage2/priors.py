@@ -110,7 +110,7 @@ class OptimGaussianPrior(PriorModule):
         if test_input is not None:
             if self.rbf is None:
                 raise Exception('Must provide prior with embedding layer evaluations for nonstationary case.')
-            rbf = self.rbf[int(test_input), :].reshape(1, -1)
+            rbf = self.rbf[int(test_input), :].unsqueeze(0)
 
         # NOTE: parameter tensor names have the form (e.g.) "layers.hidden_X.W" or "output_layer.W", whereas
         #       hyperparameter tensor names have the same form with (e.g.) ".W_rho_coeffs" instead of ".W"
@@ -151,10 +151,8 @@ class OptimGaussianPrior(PriorModule):
             if 'batch_norm' in name:
                 continue
             mu, std = self._get_params_by_name(name, test_input)
-            if std is None:
-                continue
             var = std ** 2
-            res -= 0.5 * torch.sum((param - mu) ** 2 / var)
+            res -= 0.5 * torch.sum(((param - mu) ** 2) / var)
         return res
 
 """

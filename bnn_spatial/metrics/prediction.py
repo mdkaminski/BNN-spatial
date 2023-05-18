@@ -3,6 +3,7 @@ Prediction performance metrics
 """
 
 import numpy as np
+import torch
 from scipy.special import ndtri
 
 # Note: ndtri stands for normal (n) distribution (dtr) inverse (i)
@@ -27,51 +28,74 @@ def rmspe(preds, obs, return_all=False):
     else:
         return np.average(sample_rmspe)
 
-def perc_coverage(preds, obs, pred_var, percent=90, return_all=False):
+def empirical_quantile(preds, me_var, alpha=(0.05, 0.95)):
+    """
+    Obtain quantile(s) from empirical distribution at each spatial point.
+
+    :param preds: np.ndarray, shape (n_samples, n_holdout), holdout set predictions
+    :param me_var: float, measurement error variance
+    :param alpha: tuple (float), probabilities for quantiles to cut off below
+    :return: np.ndarray, empirical quantile(s) for each holdout set location, cutting off prob in the tail(s)
+    """
+    if isinstance(preds, torch.Tensor):
+        preds = preds.detach().cpu().numpy()
+
+    n_samples = preds.shape[0]
+    n_holdout = preds.shape[1]
+    noise = np.random.randn(n_samples, n_holdout) * np.sqrt(me_var)  # introduce white noise
+    noisy_preds = preds + noise
+    pred_quantiles = np.quantile(noisy_preds, q=alpha, axis=0)
+    return pred_quantiles
+
+def perc_coverage(preds, obs, me_var, percent=90):
     """
     Compute X-percent coverage (default X = 90).
 
     :param preds: np.ndarray, shape (n_samples, n_holdout), holdout set predictions
     :param obs: np.ndarray, shape (n_holdout), holdout set observational targets
-    :param pred_var: np.ndarray, shape (n_holdout), holdout set predictive variance
+    :param me_var: float, measurement error variance
     :param percent: float, specify X for X-percent coverage (default 90)
-    :param return_all: bool, specify if X-percent coverage is given for each MCMC sample (otherwise average is given)
     :return: np.ndarray or float, holdout set X-percent coverage
     """
-    tail_prob = 1 - percent / 100
-    c = ndtri(1 - tail_prob / 2)  # quantile c with P(|Z| > c) = tail_prob
-    pred_sd = np.expand_dims(np.sqrt(pred_var), 0)
-    lower_bound = preds - c * pred_sd
-    upper_bound = preds + c * pred_sd
-    obs = np.expand_dims(obs, 0)
-    indicator = (obs >= lower_bound) & (obs <= upper_bound)
-    sample_coverage = np.average(indicator, axis=1)
-    if return_all:
-        return sample_coverage
-    else:
-        return np.average(sample_coverage)
+    if isinstance(preds, torch.Tensor):
+        preds = preds.detach().cpu().numpy()
+    if isinstance(obs, torch.Tensor):
+        obs = obs.detach().cpu().numpy()
 
-def interval_score(preds, obs, pred_var, alpha=0.1, return_all=False):
+    tail_prob = 1 - percent / 100
+    alpha_levels = (tail_prob/2, 1-tail_prob/2)
+    pred_quantiles = empirical_quantile(preds=preds,
+                                        me_var=me_var,
+                                        alpha=alpha_levels)
+    l = pred_quantiles[0, :].squeeze()  # lower bound of prediction interval
+    u = pred_quantiles[1, :].squeeze()  # upper bound of prediction interval
+    y = obs.squeeze()
+    indicator = ((y >= l) & (y <= u))
+    return np.average(indicator)
+
+def interval_score(preds, obs, me_var, alpha=0.1):
     """
     Compute negatively-oriented interval score.
 
     :param preds: np.ndarray, shape (n_samples, n_holdout), holdout set predictions
     :param obs: np.ndarray, shape (n_holdout), holdout set observational targets
-    :param pred_var: np.ndarray, shape (n_holdout), holdout set predictive variance
+    :param me_var: float, measurement error variance
     :param alpha: float, probability of tail region
-    :param return_all: bool, specify if interval score is given for each MCMC sample (otherwise average is given)
     :return: np.ndarray or float, holdout set interval score
     """
-    c = ndtri(1 - alpha / 2)  # quantile c with P(|Z| > c) = alpha
-    pred_sd = np.expand_dims(np.sqrt(pred_var), 0)
-    l = preds - c * pred_sd
-    u = preds + c * pred_sd
-    x = np.expand_dims(obs, 0)
-    score = (u - l) + (2/alpha) * ((l - x) * (x < l) + (x - u) * (x > u))
-    sample_score = np.average(score, axis=0)
-    if return_all:
-        return sample_score
-    else:
-        return np.average(sample_score)
+    if isinstance(preds, torch.Tensor):
+        preds = preds.detach().cpu().numpy()
+    if isinstance(obs, torch.Tensor):
+        obs = obs.detach().cpu().numpy()
+
+    alpha_levels = (alpha/2, 1-alpha/2)
+    pred_quantiles = empirical_quantile(preds=preds,
+                                        me_var=me_var,
+                                        alpha=alpha_levels)
+    l = pred_quantiles[0, :].squeeze()  # lower bound of prediction interval
+    u = pred_quantiles[1, :].squeeze()  # upper bound of prediction interval
+    y = obs.squeeze()
+    score = (u - l) + (2/alpha) * ((l - y) * (y < l) + (y - u) * (y > u))
+    return np.average(score)
 
 

@@ -5,6 +5,7 @@ import torch.utils.data as data_utils
 import torch.nn.functional as F
 from copy import deepcopy
 from itertools import islice, product
+from collections import ChainMap
 import time
 
 from ..samplers.adaptive_sghmc import AdaptiveSGHMC
@@ -16,7 +17,7 @@ from ..bnn.layers.embedding_layer import EmbeddingLayer
 
 class BayesNet:
     def __init__(self, net, likelihood, prior, sampling_method="adaptive_sghmc", n_gpu=0,
-                 normalise_input=False, normalise_output=False):
+                 normalise_input=False, normalise_output=True):
         """
         Bayesian neural network that uses stochastic gradient MCMC to sample from the posterior.
 
@@ -52,6 +53,8 @@ class BayesNet:
         self.sampler = None
         self.chain_count = 0  # keep track of how many chains have been sampled
         self.num_chains = None  # keep track of total number of chains
+        self.sampled_weights = None
+        self.pred_weights = None
 
         # Setup GPU device if available, move model into configured device
         self.device, device_ids = prepare_device(self.n_gpu)
@@ -69,7 +72,6 @@ class BayesNet:
         :param domain: torch.Tensor, contains all test inputs in the rows
         :param rbf_ls: float, length-scale of the RBFs
         """
-
         self.domain = domain
         self.embedding_layer = EmbeddingLayer(input_dim=input_dim,
                                               output_dim=rbf_dim,
@@ -85,7 +87,7 @@ class BayesNet:
         :param grid_width: int, width of grid of spatial locations where SGHMC is applied
         """
         if self.domain is None:
-            raise Exception('Instantiate embedding layer before incorporating spatial dependence.')
+            raise Exception('Instantiate embedding layer before incorporating nonstationarity.')
         self.nonstationary = True
         self.grid_size = grid_height * grid_width
 
@@ -113,7 +115,6 @@ class BayesNet:
         domain = domain.numpy()
         self.bnn_idxs = [np.argwhere(np.all(domain == test_subset[rr, :], axis=1)).item()
                          for rr in range(test_subset.shape[0])]
-        print('bnn_idxs: {}'.format(self.bnn_idxs))
 
     def _neg_log_joint(self, fx_batch, y_batch, n_train, test_input=None):
         """
@@ -159,9 +160,9 @@ class BayesNet:
         prior = self.prior_module(self.net, test_input)
         return prior / n_train
 
-    def _initialize_sampler(self, n_train, lr=1e-2, mdecay=0.05, num_burn_in_steps=3000, epsilon=1e-10):
+    def _initialise_sampler(self, n_train, lr=1e-2, mdecay=0.05, num_burn_in_steps=3000, epsilon=1e-10):
         """
-        Initialize a stochastic gradient MCMC sampler.
+        Initialise the stochastic gradient MCMC sampler.
 
         :param n_train: int, size of training set
         :param lr: float, learning rate
@@ -197,12 +198,21 @@ class BayesNet:
         n_burn = self.len_sampled_chain - self.len_pred_chain  # number of burn-in samples; used later
 
         # Normalise the input data
-        if isinstance(x_test, torch.Tensor):
-            x_test = x_test.detach().cpu().numpy()
-        if self.do_normalise_input:
-            x_test, *_ = zscore_normalisation(x_test, self.x_mean, self.x_std)
-        x_test_ = torch.from_numpy(x_test).float().to(self.device)
-        rbf_test_ = self.embedding_layer(x_test_)
+        if isinstance(x_test, np.ndarray):
+            x_test = torch.from_numpy(x_test).float().to(self.device)
+        if self.embedding_layer is not None:
+            if len(x_test.shape) == 1:
+                x_test = x_test.unsqueeze(1)
+            rbf_test = self.embedding_layer(x_test)
+            if self.do_normalise_input:
+                rbf_test = rbf_test.detach().cpu().numpy().squeeze()
+                rbf_test, *_ = zscore_normalisation(rbf_test, self.input_mean, self.input_std)
+            input_test = rbf_test
+        else:
+            input_test = x_test
+        if isinstance(input_test, np.ndarray):
+            input_test = torch.from_numpy(input_test)
+        input_test = input_test.float().to(self.device)
 
         def network_predict(test_input, weights):
             """
@@ -219,13 +229,13 @@ class BayesNet:
 
         # Obtain predictions for each test input in nonstationary (first) or stationary (second) case
         if self.nonstationary:
-            bnn_x_test_ = x_test_[self.bnn_idxs, :]  # trained BNN locations
+            bnn_x_test = x_test[self.bnn_idxs, :]  # trained BNN locations
 
             start_time = time.perf_counter()
 
             # Compute coefficients in convex combination
-            bnn_x = torch.tile(bnn_x_test_, (n_test, 1))  # behaves like np.tile
-            pred_x = torch.repeat_interleave(x_test_, repeats=self.grid_size, dim=0)  # behaves like np.repeat
+            bnn_x = torch.tile(bnn_x_test, (n_test, 1))  # behaves like np.tile
+            pred_x = torch.repeat_interleave(x_test, repeats=self.grid_size, dim=0)  # behaves like np.repeat
             dist = torch.norm((bnn_x - pred_x), dim=1).squeeze()  # distances from BNN locations
             dist_bnn = torch.empty(n_test, self.grid_size)  # reshaped distances, (# test inputs, # trained BNNs)
             for g in range(self.grid_size):
@@ -240,8 +250,12 @@ class BayesNet:
             preds_all_bnn = np.empty((self.grid_size, self.len_sampled_chain * self.num_chains, n_test))
             for gg in range(self.grid_size):
                 print('Obtaining predictions for grid point # {}/{}'.format(gg+1, self.grid_size))
-                preds_all_bnn[gg, :, :] = np.array([network_predict(rbf_test_, weights)
-                                                   for weights in self.sampled_weights[:, gg]])
+                bnn_preds_array = np.array([network_predict(input_test, weights)
+                                            for weights in self.sampled_weights[gg]])
+                if gg == 0:
+                    print('Storage array has shape {}'.format(preds_all_bnn.shape))
+                print('BNN predictions array has shape {}'.format(bnn_preds_array.shape))
+                preds_all_bnn[gg, :, :] = bnn_preds_array
 
             mid2_time = time.perf_counter()
 
@@ -269,7 +283,7 @@ class BayesNet:
             print('Time: {:.4f}s, {:.4f}s, {:.4f}s'.format(mid_time-start_time, mid2_time-mid_time, end_time-mid2_time))
         else:
             # Make predictions for each set of sampled weights (locationally invariant)
-            preds_all = np.array([network_predict(rbf_test_, weights) for weights in self.sampled_weights])
+            preds_all = np.array([network_predict(input_test, weights) for weights in self.sampled_weights])
 
             # Extract predictions corresponding to retained sampled weights
             preds = np.empty((self.len_pred_chain * self.num_chains, n_test))
@@ -283,25 +297,25 @@ class BayesNet:
             preds_all = zscore_unnormalisation(preds_all, self.y_mean, self.y_std)
             if self.nonstationary:
                 preds_bnn = zscore_unnormalisation(preds_bnn, self.y_mean, self.y_std)
-                preds_alL_bnn = zscore_unnormalisation(preds_all_bnn, self.y_mean, self.y_std)
+                preds_all_bnn = zscore_unnormalisation(preds_all_bnn, self.y_mean, self.y_std)
 
         if self.nonstationary:
             return preds, preds_all, preds_bnn, preds_all_bnn
         return preds, preds_all
 
-    def _normalise_data(self, x_train, y_train):
+    def _normalise_data(self, input_train, y_train):
         """
         Normalise the training data.
 
-        :param x_train: np.ndarray, training set inputs
+        :param input_train: np.ndarray, training set inputs (x values or RBF values)
         :param y_train: np.ndarray, training set outputs (noisy targets)
         :return: tuple, 2*(torch.Tensor), normalised inputs and outputs
         """
         if self.do_normalise_input:
-            x_train_, self.x_mean, self.x_std = zscore_normalisation(x_train)
-            x_train_ = torch.from_numpy(x_train_).float()
+            input_train_, self.input_mean, self.input_std = zscore_normalisation(input_train)
+            input_train_ = torch.from_numpy(input_train_).float()
         else:
-            x_train_ = torch.from_numpy(x_train).float()
+            input_train_ = torch.from_numpy(input_train).float()
 
         if self.do_normalise_output:
             y_train_, self.y_mean, self.y_std = zscore_normalisation(y_train)
@@ -309,7 +323,7 @@ class BayesNet:
         else:
             y_train_ = torch.from_numpy(y_train).float()
 
-        return x_train_, y_train_
+        return input_train_, y_train_
 
     def sample_multi_chains(self,
                             x_train,
@@ -356,14 +370,6 @@ class BayesNet:
         self.len_pred_chain = num_samples
         self.num_chains = num_chains
 
-        # For nonstationary case
-        if self.nonstationary:
-            self.sampled_weights = np.empty((self.len_sampled_chain * num_chains, self.grid_size), dtype=object)
-            self.pred_weights = np.empty((self.len_pred_chain * num_chains, self.grid_size), dtype=object)
-        else:
-            self.sampled_weights = np.empty(self.len_sampled_chain * num_chains, dtype=object)
-            self.pred_weights = np.empty(self.len_pred_chain * num_chains, dtype=object)
-
         # Train BNN for first chain
         print("Chain: 1")
         self.train(**sampling_configs)
@@ -409,24 +415,24 @@ class BayesNet:
         """
         n_discarded_all = n_discarded + num_burn_in_steps // keep_every
         n_train = x_train.shape[0]
-        if isinstance(x_train, torch.Tensor):
-            x_train = x_train.detach().cpu().numpy()
-        if isinstance(y_train, torch.Tensor):
-            y_train = y_train.detach().cpu().numpy()
-
-        # Prepare the training dataset (normalising if specified)
-        x_train, y_train = x_train.squeeze(), y_train.squeeze()
-        x_train_, y_train_ = self._normalise_data(x_train, y_train)
 
         # Compute RBF evaluations on training test inputs
         if self.embedding_layer is not None:
-            if self.do_normalise_input:
-                raise Warning('Inputs are being normalised, which will alter the effect of the embedding layer.')
-            if len(x_train_.shape) == 1:
-                x_train_ = x_train_.unsqueeze(1)
-            input_train_ = self.embedding_layer(x_train_)
+            if len(x_train.shape) == 1:
+                x_train = x_train.unsqueeze(1)
+            if isinstance(x_train, np.ndarray):
+                x_train = torch.from_numpy(x_train).float()
+            input_train = self.embedding_layer(x_train)
         else:
-            input_train_ = x_train_
+            input_train = x_train
+
+        # Prepare the training dataset (normalising if specified)
+        if isinstance(input_train, torch.Tensor):
+            input_train = input_train.detach().cpu().numpy()
+        if isinstance(y_train, torch.Tensor):
+            y_train = y_train.detach().cpu().numpy()
+        input_train, y_train = input_train.squeeze(), y_train.squeeze()
+        input_train_, y_train_ = self._normalise_data(input_train, y_train)
 
         # Initialise a data loader for training data (loops through training set batches infinitely)
         train_loader = inf_loop(data_utils.DataLoader(data_utils.TensorDataset(input_train_, y_train_),
@@ -446,7 +452,7 @@ class BayesNet:
         self.net.train()  # set to training mode
 
         # Carry out Hamiltonian dynamics on network parameters for num_steps iterations, for each spatial test input
-        for iter, (x_batch, y_batch) in batch_generator:
+        for iter, (input_batch, y_batch) in batch_generator:
 
             step = iter + 1  # step 1 corresponds to iteration 0
             bnn_iter = iter % num_steps
@@ -460,28 +466,28 @@ class BayesNet:
             # Initialise the stochastic gradient MCMC sampler
             if bnn_step == 1:
                 print('Initialising MCMC sampler for BNN # {}'.format(bnn_num+1))
-                num_sampled_weights = 0
-                num_pred_weights = 0
+                num_sampled_dict = 0  # count total number of network parameter dictionaries per BNN
+                num_pred_dict = 0  # count number of network parameter dictionaries used for prediction
+                sampled_dict_list = [None] * self.len_sampled_chain  # container to store state_dicts
                 self.net.reset_parameters()
-                self._initialize_sampler(n_train, lr, mdecay, num_burn_in_steps, epsilon)
+                self._initialise_sampler(n_train, lr, mdecay, num_burn_in_steps, epsilon)
 
-            x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
-            x_batch = x_batch.view(y_batch.shape[0], -1)  # batch of training set inputs
+            input_batch, y_batch = input_batch.to(self.device), y_batch.to(self.device)
             y_batch = y_batch.view(-1, 1)  # batch of training set noisy targets (observations)
-            fx_batch = self.net(x_batch).view(-1, 1)  # network predictions on the input batch
+            fx_batch = self.net(input_batch).view(-1, 1)  # network predictions on the input batch
 
             self.step += 1  # number of MCMC steps
 
             # Compute negative log joint density (potential energy function)
             loss = self._neg_log_joint(fx_batch, y_batch, n_train, test_input)
-            #loss_lh = self._neg_log_lik(fx_batch, y_batch)
+            #loss_lik = self._neg_log_lik(fx_batch, y_batch)
             #loss_prior = self._neg_log_prior(n_train, test_input)
 
             self.sampler.zero_grad()  # set gradients to zero (to prevent their accumulative addition)
             loss.backward()  # populate mini-batch gradient with derivatives dU/dp (U is loss)
-            #loss_lh.backward(retain_graph=True)
+            #loss_lik.backward()
             #loss_prior.backward()
-            torch.nn.utils.clip_grad_value_(self.net.parameters(), 100.)
+            torch.nn.utils.clip_grad_norm_(self.net.parameters(), 100.)
 
             # Note: clip_grad_norm_ computes norm of all gradients together, as if concatenated into a vector,
             #       and modifies the gradients in-place if their norm exceeds the limit (indicated to be 100)
@@ -497,29 +503,59 @@ class BayesNet:
                     else:
                         self.prior_module.resample(self.net)
 
-            # Save the sampled weights, INCLUDING the burn-in weights
-            if bnn_step % keep_every == 0:
-                current_weights = deepcopy(self.net.state_dict())  # extract current parameters
-                sampled_idx = num_sampled_weights + self.chain_count * self.len_sampled_chain
-                if self.nonstationary:
-                    self.sampled_weights[sampled_idx, bnn_num] = current_weights  # save samples
-                else:
-                    self.sampled_weights[sampled_idx] = current_weights
-                num_sampled_weights += 1
-
-                # Save the sampled weights, EXCLUDING the burn-in weights (i.e. only those used for predictions)
-                if num_sampled_weights > n_discarded_all:
-                    pred_idx = num_pred_weights + self.chain_count * self.len_pred_chain
+            # Save the network parameter dictionaries into a ChainMap, INCLUDING the burn-in parameters
+            if (bnn_step % keep_every == 0) or (bnn_step == num_steps):
+                net_dict = deepcopy(self.net.state_dict())  # extract current parameters
+                sampled_dict_list[num_sampled_dict] = net_dict
+                num_sampled_dict += 1
+                if bnn_step == num_steps:
+                    # Spatially-varying BNN: sampled_weights is a ChainMap with state_dict lists for each grid site
                     if self.nonstationary:
-                        self.pred_weights[pred_idx, bnn_num] = current_weights  # save samples
+                        # For first Markov chain
+                        if self.chain_count == 0:
+                            if self.sampled_weights is None:
+                                self.sampled_weights = ChainMap({bnn_num: sampled_dict_list})
+                            elif bnn_num in self.sampled_weights.keys():
+                                self.sampled_weights[bnn_num] += sampled_dict_list
+                            else:
+                                self.sampled_weights = self.sampled_weights.new_child({bnn_num: sampled_dict_list})
+                        # For subsequent Markov chains (append list of dictionaries, for this grid site)
+                        else:
+                            self.sampled_weights[bnn_num] += sampled_dict_list
+                    # Spatially-invariant BNN: sampled_weights is a list containing state_dicts for each MCMC step
                     else:
-                        self.pred_weights[pred_idx] = current_weights
-                    num_pred_weights += 1
+                        # For first Markov chain
+                        if self.sampled_weights is None:
+                            self.sampled_weights = sampled_dict_list
+                        # For subsequent Markov chains (append list of dictionaries)
+                        else:
+                            self.sampled_weights += sampled_dict_list
+
+                # Save the parameter dictionaries, EXCLUDING the burn-in parameters (i.e. those used for predictions)
+                if num_sampled_dict > n_discarded_all:
+                    num_pred_dict += 1
+                    if bnn_step == num_steps:
+                        pred_dict_list = sampled_dict_list[-self.len_pred_chain:]  # exclude the burn-in parameters
+                        if self.nonstationary:
+                            if self.chain_count == 0:
+                                if self.pred_weights is None:
+                                    self.pred_weights = ChainMap({bnn_num: pred_dict_list})
+                                elif bnn_num in self.pred_weights.keys():
+                                    self.pred_weights[bnn_num] += pred_dict_list
+                                else:
+                                    self.pred_weights = self.pred_weights.new_child({bnn_num: pred_dict_list})
+                            else:
+                                self.pred_weights[bnn_num] += pred_dict_list
+                        else:
+                            if self.pred_weights is None:
+                                self.pred_weights = pred_dict_list
+                            else:
+                                self.pred_weights += pred_dict_list
 
                     # Print feedback
-                    if num_sampled_weights % print_every_n_samples == 0 or bnn_step == num_steps:
+                    if (num_sampled_dict % print_every_n_samples == 0) or (bnn_step == num_steps):
                         feedback_str = "Step # {:8d} : Input # {:5d}/{:d} : Sample # {:5d} : Retained # {:5d}"
                         if bnn_step == num_steps:
                             feedback_str += " (*)"
                         print(feedback_str.format(self.step, bnn_num+1, len(self.bnn_idxs),
-                                                  num_sampled_weights, num_pred_weights))
+                                                  num_sampled_dict, num_pred_dict))

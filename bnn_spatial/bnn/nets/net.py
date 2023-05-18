@@ -12,7 +12,7 @@ from ..layers.embedding_layer import EmbeddingLayer
 
 
 class BlankNet(nn.Module):
-    def __init__(self, output_dim, hidden_dims, activation_fn, input_dim=None, batch_norm=False):
+    def __init__(self, output_dim, hidden_dims, activation_fn, input_dim=None):
         """
         Neural network to be initialised for usage with SGHMC.
 
@@ -20,7 +20,6 @@ class BlankNet(nn.Module):
         :param hidden_dims: list, contains number of nodes for each hidden layer
         :param activation_fn: str, specify activation/nonlinearity used in network
         :param input_dim: (optional) int, number of dimensions of network input, if embedding layer is not used
-        :param batch_norm: bool, specify is batch normalisation is used
         """
         super().__init__()
 
@@ -46,8 +45,6 @@ class BlankNet(nn.Module):
         # Hidden layers
         for i in range(1, len(hidden_dims)):
             self.layers.add_module("hidden_{}".format(i), BlankLayer(hidden_dims[i-1], hidden_dims[i]))
-            if batch_norm:
-                self.layers.add_module('batch_norm_{}'.format(i), nn.BatchNorm1d(hidden_dims[i]))
 
         # Output layer
         self.layers.add_module('output', BlankLayer(hidden_dims[-1], output_dim))
@@ -67,12 +64,10 @@ class BlankNet(nn.Module):
         :param X: torch.Tensor, size (batch_size, input_dim), input data
         :return: torch.Tensor, size (batch_size, output_dim), output data
         """
-        named_layers = self.layers.named_modules()
+        for layer in list(self.layers)[:-1]:
+            X = self.activation_fn(layer(X))
 
-        for name, layer in list(named_layers):
-            if 'hidden' in name:
-                X = self.activation_fn(layer(X))
-            elif ('batch_norm' in name) or ('output' in name):
-                X = layer(X)
+        output_layer = list(self.layers)[-1]
+        X = output_layer(X)
 
         return X
