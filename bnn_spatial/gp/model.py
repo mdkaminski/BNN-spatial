@@ -5,6 +5,7 @@ Gaussian process prior and posterior
 import torch
 import numpy as np
 from . import base
+from copy import deepcopy
 from torch.distributions.multivariate_normal import MultivariateNormal
 
 
@@ -79,22 +80,23 @@ class GP(torch.nn.Module):
         self.sn2 = sn2
         self.data_assigned = True
 
-    def update_kernel(self, kernel, sn2):
+    def update_kernel(self, **params):
         """
         For updating GP kernel following optimisation.
 
-        :param kernel: instance of Kern child, new kernel with optimised hyperparameters
-        :param sn2: float, measurement error variance estimate from optimisation
+        :param params: dict, key-value pairs with values for ampl, leng, [sn2, power]
         """
-        self.kern = kernel
-        self.sn2 = sn2
+        if 'sn2' in params.keys():
+            self.sn2 = params.pop('sn2')
+        self.kern.params = params
 
-    def predict_f(self, Xnew):
+    def predict_f(self, Xnew, noisy_targets=False):
         """
-        Compute predictive mean and variance for GP.
+        Compute the predictive mean vector and covariance matrix for the specified inputs.
 
         :param Xnew: torch.Tensor, test inputs at which to perform predictions
-        :return: tuple, predictive mean, predictive variance
+        :param noisy_targets: bool, specify if predictive covariances are computed for noisy targets
+        :return: tuple, predictive mean, predictive covariance matrix
         """
         # Throw exception if data not assigned
         if not self.data_assigned:
@@ -118,48 +120,54 @@ class GP(torch.nn.Module):
         # Compute predictive variance
         L = L.to(dtype=K_ts.dtype)
         V = torch.linalg.solve(L, K_ts)
+        if noisy_targets:
+            K_ss += torch.eye(Xnew.shape[0], dtype=self.X.dtype, device=self.X.device) * self.sn2
         fvar = K_ss - torch.mm(V.T, V)
 
         return fmean, fvar
 
-    def predict_f_samples(self, Xnew, n_samples):
+    def predict_f_samples(self, Xnew, n_samples, noisy_targets=False):
         """
-        Produce samples from posterior latent functions.
+        Generate predictions for noiseless latent targets, or noisy targets if specified.
 
         :param Xnew: torch.Tensor, inputs at which to generate samples
         :param n_samples: int, number of sampled functions
+        :param noisy_targets: bool, specify if predictive covariances are computed for noisy targets
         :return: torch.Tensor, size (n_inputs, n_samples), function samples in columns
         """
         # Throw exception if data not assigned
         if not self.data_assigned:
             raise Exception('Assign data first')
 
-        mu, var = self.predict_f(Xnew)  # compute mean vector and covariance matrix
+        mu, var = self.predict_f(Xnew, noisy_targets=noisy_targets)  # compute mean vector and covariance matrix
         L = self.cholesky_factor(var, jitter_level=self.jitter)  # lower Cholesky factor of cov matrix
         V = torch.randn(L.shape[0], n_samples, dtype=L.dtype, device=L.device)  # sample using Cholesky factor
 
         return mu + torch.matmul(L, V)
 
-    def marginal_loglik(self, hyper=(None, None, None)):
+    def marginal_loglik(self, **params):
         """
         Compute marginal log likelihood with model fit and complexity terms.
 
-        :param hyper: tuple, amplitude, lengthscale, measurement error variance
+        :param params: dict, key-value pairs with values for ampl, leng, [sn2, power]
         :return: tuple, log likelihood, model fit, complexity
         """
         # Throw exception if data not assigned
         if not self.data_assigned:
             raise Exception('Assign data first')
 
-        # Determine kernel hyperparameters and measurement error
-        ampl, leng, sn2 = hyper
-        if sn2 is None:
+        # Set kernel hyperparameters
+        kern = deepcopy(self.kern)
+        if 'sn2' in params.keys():
+            sn2 = params.pop('sn2')
+        else:
             sn2 = self.sn2
+        kern.params = params
 
         n_train = self.X.shape[0]  # compute training set size
         err_cov = sn2 * np.eye(n_train)  # compute measurement error covariance matrix
 
-        K_tt = self.kern.K(X=self.X) + err_cov  # training set covariance matrix
+        K_tt = kern.K(X=self.X) + err_cov  # training set covariance matrix
         L = self.cholesky_factor(K_tt, jitter_level=self.jitter)  # lower Cholesky factor of cov matrix
         A0 = np.linalg.solve(L, self.Y)
         A1 = np.linalg.solve(L.T, A0)
