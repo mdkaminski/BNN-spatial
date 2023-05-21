@@ -15,13 +15,12 @@ FIG_DIR = os.path.join(CWD, "figures_2d_naive")
 sys.path.append(os.path.dirname(CWD))
 
 from bnn_spatial.bnn.nets import GaussianNet, BlankNet
-from bnn_spatial.bnn.layers.embedding_layer import EmbeddingLayer
 from bnn_spatial.utils import util
 from bnn_spatial.gp.model import GP
 from bnn_spatial.gp import kernels, base
 from bnn_spatial.utils.rand_generators import GridGenerator
 from bnn_spatial.utils.plotting import plot_param_traces, plot_output_traces, plot_output_hist, plot_output_acf, \
-    plot_mean_sd, plot_rbf, plot_samples_2d, plot_lipschitz, plot_cov_heatmap, plot_cov_nonstat, plot_cov_nonstat_diff
+        plot_mean_sd, plot_rbf, plot_samples_2d, plot_lipschitz, plot_cov_heatmap, plot_cov_nonstat, plot_cov_nonstat_diff
 from bnn_spatial.stage1.wasserstein_mapper import MapperWasserstein
 from bnn_spatial.stage2.likelihoods import LikGaussian
 from bnn_spatial.stage2.priors import FixedGaussianPrior, OptimGaussianPrior
@@ -559,14 +558,14 @@ SGHMC - Fixed BNN posterior
 
 # SGHMC Hyper-parameters (see sampling_configs comments for interpretation)
 n_chains = 4
-keep_every = 10000
+keep_every = 1000
 n_samples = 200
-n_burn = 10000  # must be multiple of keep_every
+n_burn = 3000  # must be multiple of keep_every
 n_burn_thin = n_burn // keep_every
 n_discarded = 100 - n_burn_thin
 
 sampler = 'adaptive_sghmc'
-sghmc_lr = 1e-5
+sghmc_lr = 1e-4
 adaptive_lr = sghmc_lr ** 0.5
 if sampler == 'sghmc':
     sampler_lr = sghmc_lr
