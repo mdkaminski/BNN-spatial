@@ -690,7 +690,7 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
     # Populate the array containing all samples
     for k in range(n_samples_all_chains):
-        optim_dict = optim_weights[k]  # network parameter dictionary (one location only)
+        optim_dict = optim_weights[k]  # network parameter dictionary
         W_tensors = list(optim_dict.values())[0::2]
         b_tensors = list(optim_dict.values())[1::2]
         for ll in range(2 * depth):
@@ -703,7 +703,7 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
     # Populate the array only containing samples utilised for predictions
     for k in range(n_chains * n_samples):
-        optim_dict = optim_weights[k]  # network parameter dictionary (one location only)
+        optim_dict = optim_weights[k]  # network parameter dictionary
         W_tensors = list(optim_dict.values())[0::2]
         b_tensors = list(optim_dict.values())[1::2]
         for ll in range(2 * depth):

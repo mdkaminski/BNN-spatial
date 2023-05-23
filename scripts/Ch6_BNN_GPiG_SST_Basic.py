@@ -181,7 +181,7 @@ plot_samples_2d(samples=sst_samples_,
 plt.savefig(FIG_DIR + '/SST_prior_samples.png', bbox_inches='tight')
 
 """
-GP-induced BNN prior
+SST-induced BNN prior
 """
 
 # Initialize BNN to be optimised
@@ -700,6 +700,10 @@ net = BlankNet(output_dim=1,
                hidden_dims=hidden_dims,
                activation_fn=transfer_fn).to(device)
 
+# Compare named parameters of the neural networks
+print('GaussianNet has named parameters:\n{}'.format([name for name, param in opt_bnn.named_parameters()]))
+print('BlankNet has named parameters:\n{}'.format([name for name, param in net.named_parameters()]))
+
 # Generate posterior BNN parameter samples with multiple chains of sampling
 bayes_net_std = BayesNet(net, likelihood, prior,
                          sampling_method=sampler,
@@ -983,16 +987,6 @@ for ckpt in mcmc_checkpoints:  # at 1, 10, 50, 200, 400, ..., and mapper_num_ite
 
         # Trace plot of network output at specified grid point
         print('Plotting output traces (optimised BNN)')
-        plot_output_traces(domain=test_tensor,
-                           preds=bnn_optim_preds_all,
-                           n_chains=n_chains,
-                           n_discarded=n_discarded,
-                           n_burn=n_burn_thin,
-                           legend_entries=legend_entries)
-        plt.savefig(FIG_DIR + '/GPiG_posterior_trace.png', bbox_inches='tight')
-
-        # Trace plot of collated network output
-        print('Plotting output traces (Bayesian model average)')
         plot_output_traces(domain=test_tensor,
                            preds=bnn_optim_preds_all,
                            n_chains=n_chains,

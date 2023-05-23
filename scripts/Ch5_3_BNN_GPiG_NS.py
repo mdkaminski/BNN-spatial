@@ -356,7 +356,7 @@ plot_cov_nonstat(cov=std_big_cov_mx,
                  domain=test_tensor)
 plt.savefig(FIG_DIR + '/BNN_std_nonstat_cov_heatmaps.png', bbox_inches='tight')
 
-# Plot differences of nonstationary covariances (K_BNN - K_GP)
+# Plot differences of nonstationary covariances (K_GP - K_BNN)
 plot_cov_nonstat_diff(cov=bnn_big_cov_mx,
                       gp_cov=gp_big_cov_mx,
                       domain=test_tensor)

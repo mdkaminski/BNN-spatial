@@ -111,7 +111,6 @@ std_bnn = GaussianNet(input_dim=2,
 # Perform predictions using n_plot sets of sampled weights/biases
 # std_bnn_samples = std_bnn.sample_functions(test_tensor, n_plot).detach().cpu().numpy().squeeze()
 std_bnn_samples = np.array([std_bnn(test_tensor).detach().cpu().numpy() for _ in range(n_plot)]).squeeze().T
-print('Samples array shape: ' + str(std_bnn_samples.shape))
 # ensure shape of tensor is (n_test ** 2, n_plot); rows for inputs, cols for samples
 
 # Resize array of predictions
@@ -181,7 +180,7 @@ plot_samples_2d(samples=sst_samples_,
 plt.savefig(FIG_DIR + '/SST_prior_samples.png', bbox_inches='tight')
 
 """
-GP-induced BNN prior
+SST-induced BNN prior
 """
 
 # Initialize BNN to be optimised
@@ -700,6 +699,10 @@ likelihood = LikGaussian(opt_sn2)
 net = BlankNet(output_dim=1,
                hidden_dims=hidden_dims,
                activation_fn=transfer_fn).to(device)
+
+# Compare named parameters of the neural networks
+print('GaussianNet has named parameters:\n{}'.format([name for name, param in opt_bnn.named_parameters()]))
+print('BlankNet has named parameters:\n{}'.format([name for name, param in net.named_parameters()]))
 
 # Generate posterior BNN parameter samples with multiple chains of sampling
 bayes_net_std = BayesNet(net, likelihood, prior,

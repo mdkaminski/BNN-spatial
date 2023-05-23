@@ -466,7 +466,7 @@ plot_cov_nonstat(cov=std_big_cov_mx,
                  domain=test_tensor)
 plt.savefig(FIG_DIR + '/BNN_std_stat_cov_heatmaps.png', bbox_inches='tight')
 
-# Plot differences of nonstationary covariances (K_BNN - K_GP)
+# Plot differences of nonstationary covariances (K_GP - K_BNN)
 plot_cov_nonstat_diff(cov=bnn_big_cov_mx,
                       gp_cov=gp_big_cov_mx,
                       domain=test_tensor)
@@ -617,6 +617,10 @@ likelihood = LikGaussian(sn2)
 net = BlankNet(output_dim=1,
                hidden_dims=hidden_dims,
                activation_fn=transfer_fn).to(device)
+
+# Compare named parameters of the neural networks
+print('GaussianNet has named parameters:\n{}'.format([name for name, param in opt_bnn.named_parameters()]))
+print('BlankNet has named parameters:\n{}'.format([name for name, param in net.named_parameters()]))
 
 # Generate posterior BNN parameter samples with multiple chains of sampling
 bayes_net_std = BayesNet(net, likelihood, prior,
