@@ -14,7 +14,6 @@ This GitHub page provides code for reproducing the results in my Honours thesis,
 The folder `scripts` contains several `Python` script files, implementing the examples used in the Honours thesis.
 
 - `Ch4_BNN_GPiG_1D.py` implements the 1D BNN regression example used in Chapter 4.
-- `Ch4_BNN_GPiG_1D_Naive.py` implements the same 1D BNN regression example, with the the embedding layer removed.
 - `Ch5_1_BNN_GPiG_2D.py` implements a 2D BNN regression example used in Chapter 5 (Section 5.1), when calibrating a BNN prior _with an embedding layer_ to a stationary target GP prior.
 - `Ch5_1_BNN_GPiG_2D_Naive.py` implements a 2D BNN regression example used in Chapter 5 (Section 5.1), when calibrating a rudimentary BNN prior _without an embedding layer_ to a stationary target GP prior.
 - `Ch5_3_BNN_GPiG_NS.py` implements a 2D BNN regression example used in Chapter 5 (Section 5.3), when calibrating a BNN prior _with spatially-dependent hyperparameters_ (and with an embedding layer) to a nonstationary target GP prior.
