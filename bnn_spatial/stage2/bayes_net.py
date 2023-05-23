@@ -473,6 +473,7 @@ class BayesNet:
                 self._initialise_sampler(n_train, lr, mdecay, num_burn_in_steps, epsilon)
 
             input_batch, y_batch = input_batch.to(self.device), y_batch.to(self.device)
+            input_batch = input_batch.view(y_batch.shape[0], -1)  # batch of training set inputs
             y_batch = y_batch.view(-1, 1)  # batch of training set noisy targets (observations)
             fx_batch = self.net(input_batch).view(-1, 1)  # network predictions on the input batch
 
